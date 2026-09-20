@@ -23,19 +23,10 @@ export default {
   },
 
   async scheduled(_controller: ScheduledController, env: AppBindings, _ctx: ExecutionContext) {
-    // Gate on KV flag: avoids waking the serverless DB every 2min tick when nothing's pending.
-    try {
-      const active = await env.APP_KV.get('system:active_jobs');
-      if (!active) {
-        return;
-      }
-    } catch (error) {
-      logger.warn('Failed to read active jobs flag from KV, proceeding with maintenance', error instanceof Error ? error : new Error(String(error)));
-    }
-
+    // Always inspect durable state. The KV activity flag is only a hint and cannot be committed
+    // atomically with a D1 outbox row; gating on it could strand a submission after a crash.
     return runWithDb(env, async () => {
       await runBestEffortJobMaintenance(env);
-      // Clear flag early so next tick skips DB instead of waiting for TTL.
       try {
         if (!(await hasPendingMaintenanceWork(env))) {
           await clearSystemActive(env);

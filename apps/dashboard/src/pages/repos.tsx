@@ -196,12 +196,18 @@ export function ReposPage() {
     try {
       const result = await api.syncRepos();
       const syncedCount = result?.synced?.length ?? 0;
-      toast.success('Repositories up to date', {
-        id: tid,
-        description: syncedCount > 0
-          ? `${syncedCount} ${syncedCount === 1 ? 'repository' : 'repositories'} refreshed from GitHub.`
-          : 'Everything is already in sync.',
-      });
+      const failureCount = result?.failures?.length ?? 0;
+      const description = syncedCount > 0
+        ? `${syncedCount} ${syncedCount === 1 ? 'repository' : 'repositories'} refreshed from GitHub.`
+        : 'No repositories were refreshed.';
+      if (result?.partial) {
+        toast.warning('Sync finished with issues', {
+          id: tid,
+          description: `${description} ${failureCount} ${failureCount === 1 ? 'operation needs' : 'operations need'} attention; existing settings were retained where inventory was incomplete.`,
+        });
+      } else {
+        toast.success('Repositories up to date', { id: tid, description });
+      }
       loadRepos();
     } catch (e) {
       const msg = e instanceof Error ? e.message : 'Sync failed.';

@@ -3,7 +3,7 @@ import type { QuotaCheckInput, QuotaResult } from '@codraoss/api';
 import { insertJob } from '@codraoss/db/jobs';
 import type { AppBindings } from '@server/env';
 
-import { createMockPRWebhook, createTestEnv, dbDescribe, uniqueName } from '../helpers';
+import { createMockPRWebhook, createTestEnv, dbDescribe, responseCookie, uniqueName } from '../helpers';
 import { signPayload } from '../mocks/fixtures';
 
 dbDescribe('Dashboard API: quota port', () => {
@@ -25,7 +25,9 @@ dbDescribe('Dashboard API: quota port', () => {
     const authStart = await app.request('/auth/github', {}, env);
     const location = authStart.headers.get('location');
     const state = location ? new URL(location).searchParams.get('state') : null;
-    const callback = await app.request(`/auth/github/callback?code=test-code&state=${state}`, {}, env);
+    const callback = await app.request(`/auth/github/callback?code=test-code&state=${state}`, {
+      headers: { Cookie: responseCookie(authStart, 'codra_oauth_state') },
+    }, env);
     const match = (callback.headers.get('set-cookie') || '').match(/codra_session=([^;]+)/);
     return match ? match[1] : '';
   }

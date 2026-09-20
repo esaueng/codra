@@ -105,7 +105,14 @@ export type StatsResponse = {
 
 export type SyncReposResponse = {
   ok: boolean;
+  partial: boolean;
   synced: string[];
+  failures: Array<{
+    installationId: string;
+    repository?: string;
+    stage: 'inventory' | 'write' | 'cleanup';
+    error: string;
+  }>;
 };
 
 

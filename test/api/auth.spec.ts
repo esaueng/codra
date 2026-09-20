@@ -15,7 +15,7 @@ import { queryRows, runWithDb } from '@codraoss/db/client';
 import { syncUpdatesEmail } from '@server/core/updates-email';
 
 import type { AccountResponse, JobsResponse, UpdatesEmailResponse } from '@codraoss/schema/api';
-import { createTestEnv, dbDescribe } from '../helpers';
+import { createTestEnv, dbDescribe, responseCookie } from '../helpers';
 import { vi } from 'vitest';
 
 describe('Dashboard API: auth, session and account', () => {
@@ -50,7 +50,9 @@ describe('Dashboard API: auth, session and account', () => {
     const state = authLocation ? new URL(authLocation).searchParams.get('state') : null;
     expect(state).toBeTruthy();
 
-    const callback = await app.request(`/auth/github/callback?code=test-code&state=${state}`, {}, env);
+    const callback = await app.request(`/auth/github/callback?code=test-code&state=${state}`, {
+      headers: { Cookie: responseCookie(authStart, 'codra_oauth_state') },
+    }, env);
     const cookieHeader = callback.headers.get('set-cookie') || '';
     const match = cookieHeader.match(/codra_session=([^;]+)/);
 
@@ -79,6 +81,64 @@ describe('Dashboard API: auth, session and account', () => {
     expect(url.origin + url.pathname).toBe('https://fake-provider.com/authorize');
     expect(url.searchParams.get('redirect_uri')).toBe(env.AUTH_CALLBACK_URL);
     expect(url.searchParams.get('state')).toBeTruthy();
+    expect(response.headers.get('set-cookie')).toMatch(
+      /codra_oauth_state=[^;]+; Max-Age=600; Path=\/auth\/github\/callback; HttpOnly; Secure; SameSite=Lax/i,
+    );
+  });
+
+  it('rejects a callback with a missing browser state cookie before consuming server state', async () => {
+    const env = createTestEnv({ DASHBOARD_ALLOWED_USERS: 'oauth-user' });
+    (env.IDENTITY_PROVIDER as any).defaultUser.login = 'oauth-user';
+    const authStart = await app.request('/auth/github', {}, env);
+    const state = new URL(authStart.headers.get('location')!).searchParams.get('state');
+
+    const missingCookie = await app.request(`/auth/github/callback?code=test-code&state=${state}`, {}, env);
+    expect(missingCookie.headers.get('location')).toBe('/login?error=invalid_state');
+
+    const validRetry = await app.request(`/auth/github/callback?code=test-code&state=${state}`, {
+      headers: { Cookie: responseCookie(authStart, 'codra_oauth_state') },
+    }, env);
+    expect(validRetry.headers.get('location')).toBe('/dashboard');
+  });
+
+  it('rejects a mismatched browser state cookie and clears it', async () => {
+    const env = createTestEnv();
+    const authStart = await app.request('/auth/github', {}, env);
+    const state = new URL(authStart.headers.get('location')!).searchParams.get('state');
+
+    const response = await app.request(`/auth/github/callback?code=test-code&state=${state}`, {
+      headers: { Cookie: 'codra_oauth_state=mismatched-state' },
+    }, env);
+
+    expect(response.headers.get('location')).toBe('/login?error=invalid_state');
+    expect(response.headers.get('set-cookie')).toMatch(/codra_oauth_state=; Max-Age=0/i);
+  });
+
+  it('rejects expired and replayed OAuth state', async () => {
+    const expiredEnv = createTestEnv();
+    const expiredStart = await app.request('/auth/github', {}, expiredEnv);
+    const expiredState = new URL(expiredStart.headers.get('location')!).searchParams.get('state')!;
+    await expiredEnv.APP_KV.delete(`oauth-state:${expiredState}`);
+
+    const expired = await app.request(`/auth/github/callback?code=test-code&state=${expiredState}`, {
+      headers: { Cookie: responseCookie(expiredStart, 'codra_oauth_state') },
+    }, expiredEnv);
+    expect(expired.headers.get('location')).toBe('/login?error=invalid_state');
+
+    const replayEnv = createTestEnv({ DASHBOARD_ALLOWED_USERS: 'oauth-user' });
+    (replayEnv.IDENTITY_PROVIDER as any).defaultUser.login = 'oauth-user';
+    const replayStart = await app.request('/auth/github', {}, replayEnv);
+    const replayState = new URL(replayStart.headers.get('location')!).searchParams.get('state')!;
+    const cookie = responseCookie(replayStart, 'codra_oauth_state');
+    const first = await app.request(`/auth/github/callback?code=test-code&state=${replayState}`, {
+      headers: { Cookie: cookie },
+    }, replayEnv);
+    expect(first.headers.get('location')).toBe('/dashboard');
+
+    const replay = await app.request(`/auth/github/callback?code=test-code&state=${replayState}`, {
+      headers: { Cookie: cookie },
+    }, replayEnv);
+    expect(replay.headers.get('location')).toBe('/login?error=invalid_state');
   });
 
   it('rejects GitHub users outside the allowlist', async () => {
@@ -89,7 +149,9 @@ describe('Dashboard API: auth, session and account', () => {
 
     const authStart = await app.request('/auth/github', {}, env);
     const state = new URL(authStart.headers.get('location')!).searchParams.get('state');
-    const response = await app.request(`/auth/github/callback?code=test-code&state=${state}`, {}, env);
+    const response = await app.request(`/auth/github/callback?code=test-code&state=${state}`, {
+      headers: { Cookie: responseCookie(authStart, 'codra_oauth_state') },
+    }, env);
 
     expect(response.status).toBe(302);
     expect(response.headers.get('location')).toBe('/login?error=not_allowed');

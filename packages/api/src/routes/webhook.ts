@@ -9,6 +9,26 @@ import {
 import type { ApiEnv } from '../ports';
 import { jsonError } from '../http';
 
+async function submitPendingWebhookWork(c: Context<ApiEnv>, deliveryId: string) {
+  const deliveries = c.env.deps.repositories.webhookDeliveries;
+  const submission = await deliveries.claimWebhookQueueSubmission(c.env as any, deliveryId);
+  if (!submission) return false;
+
+  try {
+    await c.env.deps.platform.enqueueReviewJob(submission.message);
+    await deliveries.markWebhookQueueSubmissionSent(c.env as any, submission.id);
+    return true;
+  } catch (error) {
+    const message = error instanceof Error ? error.message : String(error);
+    await deliveries.releaseWebhookQueueSubmission(c.env as any, submission.id, message);
+    c.env.deps.platform.logger.warn('Webhook queue submission deferred for maintenance', {
+      deliveryId,
+      error: message,
+    });
+    return false;
+  }
+}
+
 // Matches via the invisible `codra-fp` marker GitHub echoes back verbatim; comments without one are ignored. Best-effort: failures here must never surface as a webhook error GitHub retries.
 async function handleFeedbackEvent(
   c: Context<ApiEnv>,
@@ -131,12 +151,21 @@ export async function handleGitHubWebhook(c: Context<ApiEnv>) {
       payload: isFeedbackEvent ? null : payload,
     });
 
-    if (!delivery.inserted) {
+    if (!delivery.inserted && delivery.processingStatus === 'queue_pending') {
+      const submitted = await submitPendingWebhookWork(c, deliveryId);
+      const job = delivery.jobId
+        ? await c.env.deps.repositories.jobs.getJobForProcessing(c.env as any, delivery.jobId)
+        : null;
+      return c.json({ ok: true, duplicate: true, message: submitted ? 'queued' : 'queue_pending', job }, 202);
+    }
+
+    if (!delivery.inserted && delivery.processingStatus !== 'received') {
       return c.json({ ok: true, duplicate: true }, 202);
     }
 
     const installationId = String((payload as any).installation?.id ?? '');
     if (!installationId || !('repository' in payload) || !payload.repository) {
+      await c.env.deps.repositories.webhookDeliveries.markWebhookDeliveryProcessed(c.env as any, deliveryId, 'ignored');
       return c.json({ ok: true, ignored: true }, 202);
     }
 
@@ -147,11 +176,13 @@ export async function handleGitHubWebhook(c: Context<ApiEnv>) {
         payload: payload as unknown as FeedbackWebhookPayload,
         repositoryId: delivery.repositoryId,
       });
+      await c.env.deps.repositories.webhookDeliveries.markWebhookDeliveryProcessed(c.env as any, deliveryId, 'processed');
       return c.json({ ok: true, feedback: true, recorded }, 202);
     }
 
     const normalized = c.env.deps.webhook.normalizePayload(eventName, payload);
     if (!normalized) {
+      await c.env.deps.repositories.webhookDeliveries.markWebhookDeliveryProcessed(c.env as any, deliveryId, 'ignored');
       return c.json({ ok: true, ignored: true, eventName }, 202);
     }
 
@@ -162,6 +193,7 @@ export async function handleGitHubWebhook(c: Context<ApiEnv>) {
     });
 
     if (repoConfig.enabled === false) {
+      await c.env.deps.repositories.webhookDeliveries.markWebhookDeliveryProcessed(c.env as any, deliveryId, 'ignored');
       return c.json({ ok: true, ignored: true, reason: 'repository_disabled' }, 202);
     }
 
@@ -183,6 +215,7 @@ export async function handleGitHubWebhook(c: Context<ApiEnv>) {
       });
 
       if (existingJob) {
+        await c.env.deps.repositories.webhookDeliveries.linkWebhookDeliveryToJob(c.env as any, deliveryId, existingJob.id);
         return c.json({
           ok: true,
           duplicate: true,
@@ -201,10 +234,12 @@ export async function handleGitHubWebhook(c: Context<ApiEnv>) {
       });
       if (throttled && !throttled.allowed) {
         // Deliberately 202, not 429: GitHub redelivers failed webhooks, so 4xx causes retry storms.
+        await c.env.deps.repositories.webhookDeliveries.markWebhookDeliveryProcessed(c.env as any, deliveryId, 'ignored');
         return c.json({ ok: true, ignored: true, reason: 'quota_exceeded' }, 202);
       }
 
-      const job = await jobsRepo.insertJob(c.env as any, {
+      const jobId = await c.env.deps.repositories.webhookDeliveries.persistWebhookReviewJob(c.env as any, {
+        deliveryId,
         installationId: extracted.installationId,
         owner: extracted.owner,
         repo: extracted.repo,
@@ -217,34 +252,23 @@ export async function handleGitHubWebhook(c: Context<ApiEnv>) {
         headRef: extracted.headRef,
         baseRef: extracted.baseRef,
         configSnapshot: repoConfig.parsedJson,
-      });
-
-      await jobsRepo.supersedeOlderJobs(c.env as any, {
-        installationId: extracted.installationId,
-        owner: extracted.owner,
-        repo: extracted.repo,
-        prNumber: extracted.prNumber,
-        newJobId: job.id,
-      });
-
-      await c.env.deps.platform.enqueueReviewJob({
-        jobId: job.id,
-        deliveryId,
-        phase: 'prepare',
         requestId: c.get('requestId'),
       });
+      const job = await jobsRepo.getJobForProcessing(c.env as any, jobId);
+      const submitted = await submitPendingWebhookWork(c, deliveryId);
 
-      return c.json({ ok: true, message: 'queued', job }, 202);
+      return c.json({ ok: true, message: submitted ? 'queued' : 'queue_pending', job }, 202);
     }
 
     // Events without a concrete job (e.g. PR close cleanup, mention lookups) still get handled by the worker.
-    await c.env.deps.platform.enqueueReviewJob({
+    await c.env.deps.repositories.webhookDeliveries.persistWebhookEventSubmission(c.env as any, {
       deliveryId,
       eventName,
       requestId: c.get('requestId'),
-    } as any);
+    });
+    const submitted = await submitPendingWebhookWork(c, deliveryId);
 
-    return c.json({ ok: true, message: 'queued' }, 202);
+    return c.json({ ok: true, message: submitted ? 'queued' : 'queue_pending' }, 202);
 }
 
 export function createWebhookRouter() {

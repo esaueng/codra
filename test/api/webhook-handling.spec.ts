@@ -2,6 +2,9 @@ import { createApiRouter } from '@codraoss/api';
 import { createMockPRWebhook, createTestEnv, uniqueName } from '../helpers';
 
 import { signPayload } from '../mocks/fixtures';
+import { queryRows } from '@codraoss/db/client';
+import { retryPendingWebhookSubmissions } from '@server/core/job-recovery';
+import { vi } from 'vitest';
 
 describe('Webhook Handling Suite', () => {
   const env = createTestEnv();
@@ -111,6 +114,118 @@ describe('Webhook Handling Suite', () => {
     expect(queue.sent[0].phase).toBe('prepare');
     expect(queue.sent[0].eventName).toBeUndefined();
     expect(queue.sent[0].payload).toBeUndefined();
+  });
+
+  it('resumes an unsent queue submission when GitHub redelivers the webhook', async () => {
+    const recoveryEnv = createTestEnv();
+    const repoName = uniqueName('redelivery-recovery');
+    const deliveryId = uniqueName('delivery-recovery');
+    const payload = createMockPRWebhook({
+      action: 'opened',
+      repository: { name: repoName, owner: { login: 'test-owner' } },
+    });
+    payload.pull_request.head.sha = '1'.repeat(40);
+    payload.pull_request.base.sha = '2'.repeat(40);
+    const body = JSON.stringify(payload);
+    const signature = await signPayload(recoveryEnv.GITHUB_APP_WEBHOOK_SECRET, body);
+    const queue = recoveryEnv.REVIEW_QUEUE as any;
+    const originalSend = queue.send.bind(queue);
+    vi.spyOn(queue, 'send').mockRejectedValueOnce(new Error('queue unavailable')).mockImplementation(originalSend);
+    const request = () => app.request('http://codra.test/webhook', {
+      method: 'POST',
+      headers: {
+        'x-github-event': 'pull_request',
+        'x-github-delivery': deliveryId,
+        'x-hub-signature-256': signature,
+        'content-type': 'application/json',
+      },
+      body,
+    }, recoveryEnv);
+
+    const first = await request();
+    expect(await first.json()).toMatchObject({ ok: true, message: 'queue_pending' });
+    expect(queue.sent).toHaveLength(0);
+
+    const redelivery = await request();
+    const redeliveryBody = await redelivery.json() as any;
+    expect(redeliveryBody).toMatchObject({ ok: true, duplicate: true, message: 'queued' });
+    expect(queue.sent).toHaveLength(1);
+    expect(queue.sent[0].jobId).toBe(redeliveryBody.job.id);
+
+    const jobs = await queryRows<{ count: number }>(
+      recoveryEnv,
+      'SELECT COUNT(*) AS count FROM jobs WHERE webhook_delivery_id = $1',
+      [deliveryId],
+    );
+    expect(Number(jobs[0].count)).toBe(1);
+  });
+
+  it('retries unsent webhook queue submissions through maintenance', async () => {
+    const recoveryEnv = createTestEnv();
+    const deliveryId = uniqueName('maintenance-recovery');
+    const payload = createMockPRWebhook({
+      action: 'opened',
+      repository: { name: uniqueName('maintenance-repo'), owner: { login: 'test-owner' } },
+    });
+    payload.pull_request.head.sha = '3'.repeat(40);
+    payload.pull_request.base.sha = '4'.repeat(40);
+    const body = JSON.stringify(payload);
+    const signature = await signPayload(recoveryEnv.GITHUB_APP_WEBHOOK_SECRET, body);
+    const queue = recoveryEnv.REVIEW_QUEUE as any;
+    const originalSend = queue.send.bind(queue);
+    vi.spyOn(queue, 'send').mockRejectedValueOnce(new Error('queue unavailable')).mockImplementation(originalSend);
+
+    await app.request('http://codra.test/webhook', {
+      method: 'POST',
+      headers: {
+        'x-github-event': 'pull_request',
+        'x-github-delivery': deliveryId,
+        'x-hub-signature-256': signature,
+      },
+      body,
+    }, recoveryEnv);
+
+    expect(queue.sent).toHaveLength(0);
+    await retryPendingWebhookSubmissions(recoveryEnv);
+    expect(queue.sent).toHaveLength(1);
+    const [submission] = await queryRows<{ status: string }>(
+      recoveryEnv,
+      'SELECT status FROM webhook_queue_submissions WHERE delivery_id = $1',
+      [deliveryId],
+    );
+    expect(submission.status).toBe('sent');
+  });
+
+  it('creates one job for concurrent copies of the same delivery', async () => {
+    const concurrentEnv = createTestEnv();
+    const deliveryId = uniqueName('concurrent-delivery');
+    const payload = createMockPRWebhook({
+      action: 'opened',
+      repository: { name: uniqueName('concurrent-repo'), owner: { login: 'test-owner' } },
+    });
+    payload.pull_request.head.sha = '5'.repeat(40);
+    payload.pull_request.base.sha = '6'.repeat(40);
+    const body = JSON.stringify(payload);
+    const signature = await signPayload(concurrentEnv.GITHUB_APP_WEBHOOK_SECRET, body);
+    const request = () => app.request('http://codra.test/webhook', {
+      method: 'POST',
+      headers: {
+        'x-github-event': 'pull_request',
+        'x-github-delivery': deliveryId,
+        'x-hub-signature-256': signature,
+      },
+      body,
+    }, concurrentEnv);
+
+    const responses = await Promise.all([request(), request()]);
+    expect(responses.every((response) => response.status === 202)).toBe(true);
+    const jobs = await queryRows<{ count: number }>(
+      concurrentEnv,
+      'SELECT COUNT(*) AS count FROM jobs WHERE webhook_delivery_id = $1',
+      [deliveryId],
+    );
+    expect(Number(jobs[0].count)).toBe(1);
+    expect((concurrentEnv.REVIEW_QUEUE as any).sent).toHaveLength(1);
   });
 
   it('rejects GitHub webhooks posted to the site root', async () => {

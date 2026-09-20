@@ -1,9 +1,8 @@
 import { describe, it, expect, vi, beforeEach } from 'vitest';
 import { createTestEnv } from '../helpers';
 
-// The cron must avoid D1 work when idle: it only queries the database when
-// the `system:active_jobs` KV flag is set, and it clears that flag as soon as there is no pending
-// maintenance work so the next tick skips the DB entirely.
+// The cron always inspects durable state because the KV activity hint cannot be committed atomically
+// with D1. It still clears that hint once durable maintenance work is exhausted.
 
 const { runBestEffortJobMaintenanceMock, hasPendingMaintenanceWorkMock } = vi.hoisted(() => ({
   runBestEffortJobMaintenanceMock: vi.fn().mockResolvedValue(undefined),
@@ -30,11 +29,12 @@ describe('scheduled() cron maintenance gating', () => {
     vi.clearAllMocks();
   });
 
-  it('skips all DB work (no maintenance) when the active-jobs flag is absent', async () => {
+  it('runs durable maintenance even when the advisory active-jobs flag is absent', async () => {
     const env = createTestEnv();
+    hasPendingMaintenanceWorkMock.mockResolvedValue(false);
     await worker.scheduled(controller, env, ctx);
-    expect(runBestEffortJobMaintenanceMock).not.toHaveBeenCalled();
-    expect(hasPendingMaintenanceWorkMock).not.toHaveBeenCalled();
+    expect(runBestEffortJobMaintenanceMock).toHaveBeenCalledTimes(1);
+    expect(hasPendingMaintenanceWorkMock).toHaveBeenCalledTimes(1);
   });
 
   it('runs maintenance and clears the flag when no pending work remains', async () => {
@@ -45,7 +45,7 @@ describe('scheduled() cron maintenance gating', () => {
     await worker.scheduled(controller, env, ctx);
 
     expect(runBestEffortJobMaintenanceMock).toHaveBeenCalledTimes(1);
-    // Flag cleared -> the next tick will early-return without touching D1.
+    // The advisory flag is cleared instead of waiting for its TTL.
     expect(await env.APP_KV.get('system:active_jobs')).toBeNull();
   });
 

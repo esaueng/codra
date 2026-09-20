@@ -1,5 +1,6 @@
 import type { DashboardSessionUser, SessionStore, ReviewRuntime } from '@codraoss/core/ports';
 import type { ApiAction } from '@codraoss/schema/api';
+import type { ReviewJobMessage } from '@codraoss/schema';
 
 // Type stubs that represent what the API layer requires.
 // By importing types from @codraoss/db, we avoid a runtime dependency while retaining type safety.
@@ -54,7 +55,7 @@ export interface PlatformPort {
   getUpdatesEmailPreference: (githubUserId: number) => Promise<any>;
   syncUpdatesEmail: (githubUserId: number, email: string | null | undefined) => Promise<boolean>;
   terminateJobWorkflow: (job: { id: string; workflowInstanceId?: string | null }) => Promise<void>;
-  enqueueReviewJob: (input: { jobId: string; deliveryId: string; phase: string; requestId?: string }) => Promise<void>;
+  enqueueReviewJob: (input: ReviewJobMessage) => Promise<void>;
   getOrFetchRawDiffForCompletedJob: (runtime: ReviewRuntime, job: any, github: any) => Promise<string>;
   logger: {
     info(message: string, data?: unknown): void;

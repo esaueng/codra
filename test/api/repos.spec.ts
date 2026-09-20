@@ -1,12 +1,13 @@
 import { createApiRouter } from '@codraoss/api';
+import type { ApiRouterDeps } from '@codraoss/api';
 import { getJobForProcessing, insertJob } from '@codraoss/db/jobs';
 
-import { getRepoConfigRecord } from '@codraoss/db/repo-configs';
+import { getRepoConfigRecord, syncRepoConfig, updateRepoConfigEnabled } from '@codraoss/db/repo-configs';
 import { loadRepoConfig, updateGlobalConfig } from '@server/core/config';
 import { GitHubClient } from '@codraoss/provider-github';
 
 import { defaultRepoConfig } from '@codraoss/schema';
-import { createTestEnv, uniqueName } from '../helpers';
+import { createTestEnv, responseCookie, uniqueName } from '../helpers';
 import { vi } from 'vitest';
 
 
@@ -42,7 +43,9 @@ describe('Dashboard API: repositories and repo config', () => {
     const state = authLocation ? new URL(authLocation).searchParams.get('state') : null;
     expect(state).toBeTruthy();
 
-    const callback = await app.request(`/auth/github/callback?code=test-code&state=${state}`, {}, env);
+    const callback = await app.request(`/auth/github/callback?code=test-code&state=${state}`, {
+      headers: { Cookie: responseCookie(authStart, 'codra_oauth_state') },
+    }, env);
     const cookieHeader = callback.headers.get('set-cookie') || '';
     const match = cookieHeader.match(/codra_session=([^;]+)/);
 
@@ -96,6 +99,74 @@ describe('Dashboard API: repositories and repo config', () => {
 
     expect(content).toBe('const greeting = "café — こんにちは";');
     expect(requestedUrl).toBe('https://api.github.com/repos/owner/repo/contents/src/app.ts?ref=abc123');
+  });
+
+  it('retains repository settings and reports a partial sync when one database write fails', async () => {
+    const env = createTestEnv();
+    const token = await getAuthCookie(env);
+    const installationId = uniqueName('installation');
+    const retainedRepo = uniqueName('retained-repo');
+    const staleRepo = uniqueName('stale-repo');
+    await syncRepoConfig(env, { installationId, owner: 'sync-owner', repo: retainedRepo });
+    await updateRepoConfigEnabled(env, { owner: 'sync-owner', repo: retainedRepo, enabled: false });
+    await syncRepoConfig(env, { installationId, owner: 'sync-owner', repo: staleRepo });
+
+    const deps = (env as any).deps as ApiRouterDeps;
+    deps.gitProvider.listInstallations = async () => [{ id: installationId }];
+    deps.gitProvider.createService = () => ({
+      listRepositories: async () => [{ owner: { login: 'sync-owner' }, name: retainedRepo }],
+    });
+    const originalSync = deps.repositories.repoConfigs.syncRepoConfig;
+    vi.spyOn(deps.repositories.repoConfigs, 'syncRepoConfig').mockImplementation(async (dbEnv, input) => {
+      if (input.repo === retainedRepo) throw new Error('database write failed');
+      return originalSync(dbEnv, input);
+    });
+
+    const response = await app.request('/api/repos/sync', {
+      method: 'POST',
+      headers: {
+        Cookie: `codra_session=${token}`,
+        'x-requested-with': 'XMLHttpRequest',
+      },
+    }, env);
+    const result = await response.json() as any;
+
+    expect(response.status).toBe(200);
+    expect(result).toMatchObject({ ok: false, partial: true, synced: [] });
+    expect(result.failures).toEqual([
+      expect.objectContaining({ installationId, repository: `sync-owner/${retainedRepo}`, stage: 'write' }),
+    ]);
+    expect((await getRepoConfigRecord(env, 'sync-owner', retainedRepo))?.enabled).toBe(false);
+    expect(await getRepoConfigRecord(env, 'sync-owner', staleRepo)).toBeNull();
+  });
+
+  it('skips destructive cleanup when an installation inventory is incomplete', async () => {
+    const env = createTestEnv();
+    const token = await getAuthCookie(env);
+    const installationId = uniqueName('inventory-installation');
+    const retainedRepo = uniqueName('inventory-retained');
+    await syncRepoConfig(env, { installationId, owner: 'sync-owner', repo: retainedRepo });
+
+    const deps = (env as any).deps as ApiRouterDeps;
+    deps.gitProvider.listInstallations = async () => [{ id: installationId }];
+    deps.gitProvider.createService = () => ({
+      listRepositories: async () => { throw new Error('GitHub pagination failed'); },
+    });
+
+    const response = await app.request('/api/repos/sync', {
+      method: 'POST',
+      headers: {
+        Cookie: `codra_session=${token}`,
+        'x-requested-with': 'XMLHttpRequest',
+      },
+    }, env);
+    const result = await response.json() as any;
+
+    expect(result).toMatchObject({ ok: false, partial: true });
+    expect(result.failures).toEqual([
+      expect.objectContaining({ installationId, stage: 'inventory' }),
+    ]);
+    expect(await getRepoConfigRecord(env, 'sync-owner', retainedRepo)).not.toBeNull();
   });
 
   it('keeps repo model settings inherited when loading global strategy', async () => {

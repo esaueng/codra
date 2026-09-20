@@ -1,5 +1,5 @@
 import { vi } from 'vitest';
-import { readFileSync } from 'node:fs';
+import { readFileSync, readdirSync } from 'node:fs';
 import path from 'node:path';
 import { fileURLToPath } from 'node:url';
 import { Miniflare } from 'miniflare';
@@ -95,12 +95,12 @@ if (typeof window === 'undefined') {
     d1Databases: { DB: 'codra-test' },
   });
   const testDb = await miniflare.getD1Database('DB');
-  const migrationSql = readFileSync(
-    path.join(REPO_ROOT, 'packages/db/migrations-d1/0001_initial.sql'),
-    'utf8',
-  );
-  const migrationStatements = migrationSql.split(';').map((statement) => statement.trim()).filter(Boolean);
-  await testDb.batch(migrationStatements.map((statement) => testDb.prepare(statement)));
+  const migrationsDirectory = path.join(REPO_ROOT, 'packages/db/migrations-d1');
+  for (const migrationFile of readdirSync(migrationsDirectory).filter((file) => file.endsWith('.sql')).sort()) {
+    const migrationSql = readFileSync(path.join(migrationsDirectory, migrationFile), 'utf8');
+    const migrationStatements = migrationSql.split(';').map((statement) => statement.trim()).filter(Boolean);
+    await testDb.batch(migrationStatements.map((statement) => testDb.prepare(statement)));
+  }
   vi.stubGlobal('__CODRA_TEST_DB__', testDb);
 }
 

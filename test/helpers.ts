@@ -76,6 +76,11 @@ export class MockQueue {
   }
 }
 
+export function responseCookie(response: Response, name: string) {
+  const match = (response.headers.get('set-cookie') ?? '').match(new RegExp(`(?:^|,?\\s*)${name}=([^;]*)`));
+  return match ? `${name}=${match[1]}` : '';
+}
+
 export class MockWorkflow {
   public readonly created: any[] = [];
   public readonly terminated: string[] = [];

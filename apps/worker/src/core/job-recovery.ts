@@ -2,8 +2,35 @@ import type { AppBindings } from '../env';
 import { getTerminalJobsNeedingCheckRunCompletion, markJobCheckRunCompleted, recoverExpiredJobLeases } from '@codraoss/db/jobs';
 import { logger } from './logger';
 import { GitHubService } from '@codraoss/provider-github';
+import {
+  claimWebhookQueueSubmission,
+  markWebhookQueueSubmissionSent,
+  releaseWebhookQueueSubmission,
+} from '@codraoss/db/webhook-deliveries';
 
 const MAX_RECOVERY_COUNT = 3;
+const MAX_WEBHOOK_SUBMISSIONS_PER_TICK = 10;
+
+export async function retryPendingWebhookSubmissions(env: AppBindings) {
+  for (let index = 0; index < MAX_WEBHOOK_SUBMISSIONS_PER_TICK; index += 1) {
+    const submission = await claimWebhookQueueSubmission(env);
+    if (!submission) return;
+
+    try {
+      await env.REVIEW_QUEUE.send(submission.message);
+      await markWebhookQueueSubmissionSent(env, submission.id);
+    } catch (error) {
+      const message = error instanceof Error ? error.message : String(error);
+      await releaseWebhookQueueSubmission(env, submission.id, message);
+      logger.error(
+        `Failed to submit queued webhook delivery ${submission.deliveryId}; maintenance will retry it`,
+        error instanceof Error ? error : new Error(message),
+      );
+      // The oldest row is pending again. Stop so this invocation does not hot-loop on it.
+      return;
+    }
+  }
+}
 
 export async function recoverJobs(env: AppBindings) {
   try {
@@ -76,6 +103,7 @@ export async function completeTerminalCheckRuns(env: AppBindings) {
 }
 
 export async function runOpportunisticJobMaintenance(env: AppBindings) {
+  await retryPendingWebhookSubmissions(env);
   await recoverJobs(env);
   await completeTerminalCheckRuns(env);
 }
