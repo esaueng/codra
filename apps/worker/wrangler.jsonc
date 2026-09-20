@@ -8,7 +8,7 @@
   ],
   "routes": [
     {
-      "pattern": "app.codra.devarshi.dev",
+      "pattern": "codra.esau.app",
       "custom_domain": true
     }
   ],
@@ -31,15 +31,14 @@
     {
       "binding": "DB",
       "database_name": "codra-db",
-      "database_id": "00000000-0000-0000-0000-000000000000",
+      "database_id": "9dadb7d9-d0ca-4c80-a778-cb661d3398fd",
       "migrations_dir": "../../packages/db/migrations-d1"
     }
   ],
   "kv_namespaces": [
     {
       "binding": "APP_KV",
-      "id": "f5f88c23f1f14342b2ec2c733470921b",
-      "preview_id": "9f2cdc0fdf8d4c868ae2754f66b839b8"
+      "id": "3fadf3360ebf489a98852d295a13f5a5"
     }
   ],
   "queues": {
@@ -97,17 +96,15 @@
       "GITHUB_APP_WEBHOOK_SECRET",
       "GITHUB_CLIENT_ID",
       "GITHUB_CLIENT_SECRET",
-      "LLM_CONFIG_ENCRYPTION_KEY",
-      "CF_API_TOKEN",
-      "CF_ACCOUNT_ID"
+      "LLM_CONFIG_ENCRYPTION_KEY"
     ]
   },
   "vars": {
-    "APP_URL": "https://app.codra.devarshi.dev",
-    "AUTH_CALLBACK_URL": "https://app.codra.devarshi.dev/auth/github/callback",
-    "BOT_USERNAME": "codra-app",
-    "GITHUB_APP_SLUG": "codra-app-personal",
-    "DASHBOARD_ALLOWED_USERS": "devarshishimpi",
+    "APP_URL": "https://codra.esau.app",
+    "AUTH_CALLBACK_URL": "https://codra.esau.app/auth/github/callback",
+    "BOT_USERNAME": "codra-esau",
+    "GITHUB_APP_SLUG": "codra-esau",
+    "DASHBOARD_ALLOWED_USERS": "petergstfsn",
     "ENVIRONMENT": "production"
   }
 }
