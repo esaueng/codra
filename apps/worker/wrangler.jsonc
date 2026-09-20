@@ -31,15 +31,12 @@
     {
       "binding": "DB",
       "database_name": "codra-db",
-      "database_id": "00000000-0000-0000-0000-000000000000",
       "migrations_dir": "../../packages/db/migrations-d1"
     }
   ],
   "kv_namespaces": [
     {
-      "binding": "APP_KV",
-      "id": "f5f88c23f1f14342b2ec2c733470921b",
-      "preview_id": "9f2cdc0fdf8d4c868ae2754f66b839b8"
+      "binding": "APP_KV"
     }
   ],
   "queues": {
