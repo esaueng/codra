@@ -1,12 +1,14 @@
 import { vi } from 'vitest';
 import { readFileSync } from 'node:fs';
 import path from 'node:path';
+import { fileURLToPath } from 'node:url';
 import { Miniflare } from 'miniflare';
 
 // Disable telemetry during unit/integration tests to prevent polluting production metrics
 process.env.TELEMETRY_DISABLED = 'true';
 
 const TEST_ENV_FILES = ['.env.test', '.env.local', '.env', '.dev.vars', '.env.test.example'];
+const REPO_ROOT = path.resolve(path.dirname(fileURLToPath(import.meta.url)), '..');
 const REQUIRED_TEST_ENV_KEYS = [
   'GITHUB_APP_SLUG',
   'GITHUB_APP_WEBHOOK_SECRET',
@@ -52,7 +54,7 @@ function loadTestEnvFromFiles() {
 
   for (const file of TEST_ENV_FILES) {
     try {
-      const content = readFileSync(path.join(process.cwd(), file), 'utf8');
+      const content = readFileSync(path.join(REPO_ROOT, file), 'utf8');
       for (const line of content.split(/\r?\n/)) {
         const trimmed = line.trim();
         if (!trimmed || trimmed.startsWith('#')) continue;
@@ -93,7 +95,10 @@ if (typeof window === 'undefined') {
     d1Databases: { DB: 'codra-test' },
   });
   const testDb = await miniflare.getD1Database('DB');
-  const migrationSql = readFileSync(path.join(process.cwd(), 'packages/db/migrations-d1/0001_initial.sql'), 'utf8');
+  const migrationSql = readFileSync(
+    path.join(REPO_ROOT, 'packages/db/migrations-d1/0001_initial.sql'),
+    'utf8',
+  );
   const migrationStatements = migrationSql.split(';').map((statement) => statement.trim()).filter(Boolean);
   await testDb.batch(migrationStatements.map((statement) => testDb.prepare(statement)));
   vi.stubGlobal('__CODRA_TEST_DB__', testDb);
