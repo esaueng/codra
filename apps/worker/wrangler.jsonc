@@ -102,8 +102,8 @@
   "vars": {
     "APP_URL": "https://codra.esau.app",
     "AUTH_CALLBACK_URL": "https://codra.esau.app/auth/github/callback",
-    "BOT_USERNAME": "codra-esau",
-    "GITHUB_APP_SLUG": "codra-esau",
+    "BOT_USERNAME": "codra-esau-org",
+    "GITHUB_APP_SLUG": "codra-esau-org",
     "DASHBOARD_ALLOWED_USERS": "petergstfsn",
     "ENVIRONMENT": "production"
   }
