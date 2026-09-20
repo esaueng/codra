@@ -1,4 +1,4 @@
-import type { DbEnv } from './env';
+import type { D1Binding, DbEnv } from './env';
 
 export type SqlStatement = {
   sql: string;
@@ -18,7 +18,7 @@ function normalizeParam(param: unknown): unknown {
   return param;
 }
 
-function prepare(db: Pick<D1Database, 'prepare'>, statement: SqlStatement) {
+function prepare(db: Pick<D1Binding, 'prepare'>, statement: SqlStatement) {
   const prepared = db.prepare(toD1Sql(statement.sql));
   const params = (statement.params ?? []).map(normalizeParam);
   return params.length > 0 ? prepared.bind(...params) : prepared;
