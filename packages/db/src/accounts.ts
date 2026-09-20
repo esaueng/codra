@@ -1,8 +1,8 @@
 import type { DbEnv } from './env';
-import { queryRows } from './client';
+import { newId, queryRows, SQL_NOW } from './client';
 import { ACCOUNT_COLUMNS } from './constants';
 
-// Durable account record (see db/migrations/004_account_settings.sql).
+// Durable account record (see migrations-d1/0001_initial.sql).
 export type AccountSettingsRecord = {
   // Stable, unique account id (uuid) - not the GitHub user id.
   id: string;
@@ -50,16 +50,16 @@ export async function upsertAccountSettings(
 ): Promise<AccountSettingsRecord> {
   const rows = await queryRows<Row>(
     env,
-    `INSERT INTO account_settings (github_user_id, github_username, account_name, account_email)
-     VALUES ($1, $2, $3, $4)
+    `INSERT INTO account_settings (id, github_user_id, github_username, account_name, account_email)
+     VALUES ($1, $2, $3, $4, $5)
      ON CONFLICT (github_user_id) DO UPDATE SET
        github_username = EXCLUDED.github_username,
        -- COALESCE, not EXCLUDED: this upsert runs on every sign-in, so keep an existing display name and only backfill when unset.
        account_name    = COALESCE(account_settings.account_name, EXCLUDED.account_name),
        account_email   = EXCLUDED.account_email,
-       updated_at      = now()
+       updated_at      = ${SQL_NOW}
      RETURNING ${ACCOUNT_COLUMNS}`,
-    [input.githubUserId, input.githubUsername, input.accountName, input.accountEmail],
+    [newId(), input.githubUserId, input.githubUsername, input.accountName, input.accountEmail],
   );
   return mapRow(rows[0]);
 }
@@ -98,7 +98,7 @@ export async function updateAccountSettings(
   const rows = await queryRows<Row>(
     env,
     `UPDATE account_settings
-     SET ${assignments.join(', ')}, updated_at = now()
+     SET ${assignments.join(', ')}, updated_at = ${SQL_NOW}
      WHERE github_user_id = $1
      RETURNING ${ACCOUNT_COLUMNS}`,
     params,

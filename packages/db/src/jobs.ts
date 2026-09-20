@@ -1,9 +1,9 @@
 import type { DbEnv } from './env';
 import { hexToBytes } from '@codraoss/schema/hex';
-import { parseJsonColumn, queryRows } from './client';
+import { newId, parseJsonColumn, queryRows } from './client';
 import { defaultRepoConfig, jobDetailSchema, repoConfigSchema, type RepoConfig } from '@codraoss/schema';
 import { getOrCreateRepository } from './repositories';
-import { reviewCommentJsonObject } from './review-comment-sql';
+import { reviewCommentsAggregate } from './review-comment-sql';
 import { type JobRow, bytesToHex, mapJob } from './jobs-mapping';
 import { markSystemActive } from './jobs-activity';
 
@@ -16,7 +16,7 @@ export async function setJobWorkflowInstance(env: DbEnv, jobId: string, workflow
     env,
     `
       UPDATE jobs
-      SET workflow_instance_id = $2::uuid
+      SET workflow_instance_id = $2
       WHERE id = $1
     `,
     [jobId, workflowInstanceId],
@@ -53,11 +53,11 @@ export async function hasPendingMaintenanceWork(env: DbEnv): Promise<boolean> {
       ) AS has_work
     `,
   );
-  return rows[0]?.has_work === true;
+  return Boolean(rows[0]?.has_work);
 }
 
 export async function insertJob(
-  env: Pick<DbEnv, 'HYPERDRIVE' | 'APP_KV'>,
+  env: Pick<DbEnv, 'DB' | 'APP_KV'>,
   input: {
     installationId: string;
     owner: string;
@@ -80,11 +80,12 @@ export async function insertJob(
     repo: input.repo,
   });
 
-  const [row] = await queryRows<JobRow>(
+  const id = newId();
+  const [inserted] = await queryRows<JobRow>(
     env,
     `
-      WITH inserted AS (
-        INSERT INTO jobs (
+      INSERT INTO jobs (
+          id,
           repository_id,
           pr_number,
           pr_title,
@@ -98,14 +99,11 @@ export async function insertJob(
           base_ref,
           retry_of_job_id
         )
-        VALUES ($1, $2, $3, $4, $5, $6, $7, 'queued', $8::text::jsonb, $9, $10, $11::uuid)
-        RETURNING *
-      )
-      SELECT i.*, r.owner, r.repo, r.installation_id
-      FROM inserted i
-      JOIN repositories r ON i.repository_id = r.id
+      VALUES ($1, $2, $3, $4, $5, $6, $7, $8, 'queued', $9, $10, $11, $12)
+      RETURNING *
     `,
     [
+      id,
       repositoryId,
       input.prNumber,
       input.prTitle,
@@ -121,7 +119,12 @@ export async function insertJob(
   );
 
   await markSystemActive(env);
-  return mapJob(row);
+  return mapJob({
+    ...inserted,
+    owner: input.owner,
+    repo: input.repo,
+    installation_id: input.installationId,
+  });
 }
 
 export async function listJobs(
@@ -162,7 +165,7 @@ export async function listJobs(
   }
   if (query.search) {
     params.push(`%${query.search}%`);
-    conditions.push(`(j.pr_title ILIKE $${params.length} OR CAST(j.pr_number AS TEXT) LIKE $${params.length})`);
+    conditions.push(`(lower(j.pr_title) LIKE lower($${params.length}) OR CAST(j.pr_number AS TEXT) LIKE $${params.length})`);
   }
 
   const whereClause = conditions.length > 0 ? `WHERE ${conditions.join(' AND ')}` : '';
@@ -223,8 +226,8 @@ export async function getJobDetail(env: DbEnv, jobId: string) {
         r.installation_id,
         COALESCE(
           (
-            SELECT JSON_AGG(
-              JSON_BUILD_OBJECT(
+            SELECT json_group_array(json(file_json)) FROM (
+              SELECT json_object(
                 'id', fr.id,
                 'jobId', fr.job_id,
                 'filePath', fr.file_path,
@@ -247,33 +250,21 @@ export async function getJobDetail(env: DbEnv, jobId: string) {
                 'batchSize', fr.batch_size,
                 -- What the gates dropped. Without it the logs cannot tell "found nothing" apart
                 -- from "found things and withheld every one of them".
-                'withheldCounts', fr.withheld_counts,
+                'withheldCounts', json(fr.withheld_counts),
                 'degraded', fr.degraded,
-                'parsedComments', COALESCE(
-                  (
-                    SELECT JSON_AGG(
-                      ${reviewCommentJsonObject(
-                        // Correlated rather than joined so this stays one round trip; served by the comment_feedback (repository_id, fingerprint) index.
-                        `'humanLabel', (
-                          SELECT cf.outcome FROM comment_feedback cf
-                          WHERE cf.repository_id = j.repository_id
-                            AND cf.fingerprint = rc.fingerprint
-                            AND cf.source = 'dashboard'
-                          LIMIT 1
-                        )`,
-                      )}
-                      ORDER BY rc.id ASC
-                    ) FROM review_comments rc WHERE rc.file_review_id = fr.id
-                  ),
-                  '[]'::json
-                )
-              )
+                'parsedComments', json(${reviewCommentsAggregate(`'humanLabel', (
+                  SELECT cf.outcome FROM comment_feedback cf
+                  WHERE cf.repository_id = j.repository_id
+                    AND cf.fingerprint = rc.fingerprint
+                    AND cf.source = 'dashboard'
+                  LIMIT 1
+                )`)})
+              ) AS file_json
+              FROM file_reviews fr WHERE fr.job_id = j.id
               ORDER BY fr.created_at ASC
             )
-            FROM file_reviews fr
-            WHERE fr.job_id = j.id
           ),
-          '[]'::json
+          '[]'
         ) AS files_json
       FROM jobs j
       JOIN repositories r ON j.repository_id = r.id

@@ -1,7 +1,7 @@
 import { describe, it, expect, vi, beforeEach } from 'vitest';
 import { createTestEnv } from '../helpers';
 
-// The cron must keep the serverless Postgres asleep when idle: it only opens a DB connection when
+// The cron must avoid D1 work when idle: it only queries the database when
 // the `system:active_jobs` KV flag is set, and it clears that flag as soon as there is no pending
 // maintenance work so the next tick skips the DB entirely.
 
@@ -45,7 +45,7 @@ describe('scheduled() cron maintenance gating', () => {
     await worker.scheduled(controller, env, ctx);
 
     expect(runBestEffortJobMaintenanceMock).toHaveBeenCalledTimes(1);
-    // Flag cleared -> the next tick will early-return without touching Postgres.
+    // Flag cleared -> the next tick will early-return without touching D1.
     expect(await env.APP_KV.get('system:active_jobs')).toBeNull();
   });
 

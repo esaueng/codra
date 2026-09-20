@@ -21,8 +21,8 @@ export async function getReviewSettings(env: DbEnv): Promise<ReviewSettings> {
   try {
     const rows = await queryRows<{ key: string; value: string }>(
       env,
-      'SELECT key, value FROM global_settings WHERE key = ANY($1)',
-      [[CONCURRENCY_KEY, MAX_COMMENTS_KEY, MAX_FILES_KEY]],
+      'SELECT key, value FROM global_settings WHERE key IN ($1, $2, $3)',
+      [CONCURRENCY_KEY, MAX_COMMENTS_KEY, MAX_FILES_KEY],
     );
     const map = new Map(rows.map((row) => [row.key, row.value]));
     const storedConcurrency = map.get(CONCURRENCY_KEY);

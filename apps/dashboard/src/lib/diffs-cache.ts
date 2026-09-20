@@ -1,6 +1,6 @@
 /**
  * Session cache for a job's per-file diffs, shared by the Files-changed tab and the Logs page so
- * switching between them doesn't refetch (`diff_input` isn't persisted in Postgres - see
+ * switching between them doesn't refetch (`diff_input` isn't persisted in D1 - see
  * GET /api/jobs/:id/diffs - so both fetch it lazily).
  */
 

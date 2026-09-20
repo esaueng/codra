@@ -1,10 +1,10 @@
 import type { DbEnv } from './env';
 import type { ParsedReviewComment } from '@codraoss/schema';
 
-import { parseJsonColumn, queryRows, queryTransaction } from './client';
+import { newId, parseJsonColumn, queryBatch, queryRows } from './client';
 import {
-  REVIEW_COMMENT_INSERT_CASTS,
   REVIEW_COMMENT_INSERT_COLUMNS,
+  REVIEW_COMMENT_INSERT_PLACEHOLDERS,
   reviewCommentInsertValues,
   reviewCommentsAggregate,
 } from './review-comment-sql';
@@ -70,10 +70,12 @@ export async function upsertFileReview(
     asyncModel?: string | null;
   },
 ) {
-  await queryTransaction(env, async (tx) => {
-    const [review] = await tx.query<{ id: string }>(
+  await queryBatch(env, [
+    {
+      sql:
       `
         INSERT INTO file_reviews (
+          id,
           job_id,
           file_path,
           file_status,
@@ -96,31 +98,31 @@ export async function upsertFileReview(
           degraded,
           batch_size
         )
-        VALUES ($1::uuid, $2, $3, $4, $5, $6, $7, $8, $9, $10, $11, $12, $13, $14, $15, $16, $17, $18, $19::text::jsonb, $20, 1)
+        VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10, $11, $12, $13, $14, $15, $16, $17, $18, $19, $20, $21, 1)
         ON CONFLICT (job_id, file_path) DO UPDATE SET
-          file_status = EXCLUDED.file_status,
-          model_used = EXCLUDED.model_used,
-          diff_line_count = EXCLUDED.diff_line_count,
-          diff_input = EXCLUDED.diff_input,
-          raw_ai_output = EXCLUDED.raw_ai_output,
-          input_tokens = EXCLUDED.input_tokens,
-          output_tokens = EXCLUDED.output_tokens,
-          duration_ms = EXCLUDED.duration_ms,
-          verdict = EXCLUDED.verdict,
-          file_summary = EXCLUDED.file_summary,
-          overall_correctness = EXCLUDED.overall_correctness,
-          confidence_score = EXCLUDED.confidence_score,
-          error_msg = EXCLUDED.error_msg,
-          model_provider = EXCLUDED.model_provider,
-          async_request_id = EXCLUDED.async_request_id,
-          async_model = EXCLUDED.async_model,
-          withheld_counts = EXCLUDED.withheld_counts,
-          degraded = EXCLUDED.degraded,
-          batch_size = EXCLUDED.batch_size,
+          file_status = excluded.file_status,
+          model_used = excluded.model_used,
+          diff_line_count = excluded.diff_line_count,
+          diff_input = excluded.diff_input,
+          raw_ai_output = excluded.raw_ai_output,
+          input_tokens = excluded.input_tokens,
+          output_tokens = excluded.output_tokens,
+          duration_ms = excluded.duration_ms,
+          verdict = excluded.verdict,
+          file_summary = excluded.file_summary,
+          overall_correctness = excluded.overall_correctness,
+          confidence_score = excluded.confidence_score,
+          error_msg = excluded.error_msg,
+          model_provider = excluded.model_provider,
+          async_request_id = excluded.async_request_id,
+          async_model = excluded.async_model,
+          withheld_counts = excluded.withheld_counts,
+          degraded = excluded.degraded,
+          batch_size = excluded.batch_size,
           transient_error_count = 0
-        RETURNING id
       `,
-      [
+      params: [
+        newId(),
         jobId,
         input.filePath,
         input.fileStatus,
@@ -139,24 +141,22 @@ export async function upsertFileReview(
         input.modelProvider ?? null,
         input.asyncRequestId ?? null,
         input.asyncModel ?? null,
-        // JSON text to ::text::jsonb placeholder prevents string-scalar bugs.
         input.withheldCounts ? JSON.stringify(input.withheldCounts) : null,
         input.degraded ?? null,
       ],
-    );
-
-    await tx.query('DELETE FROM review_comments WHERE file_review_id = $1::uuid', [review.id]);
-
-    if (input.parsedComments.length > 0) {
-      await tx.query(
-        `
-          INSERT INTO review_comments (file_review_id, ${REVIEW_COMMENT_INSERT_COLUMNS.join(', ')})
-          SELECT $1::uuid, * FROM UNNEST(${REVIEW_COMMENT_INSERT_CASTS})
-        `,
-        [review.id, ...reviewCommentInsertValues(input.parsedComments)],
-      );
-    }
-  });
+    },
+    {
+      sql: `DELETE FROM review_comments
+            WHERE file_review_id = (SELECT id FROM file_reviews WHERE job_id = $1 AND file_path = $2)`,
+      params: [jobId, input.filePath],
+    },
+    ...input.parsedComments.map((comment) => ({
+      sql: `INSERT INTO review_comments (file_review_id, ${REVIEW_COMMENT_INSERT_COLUMNS.join(', ')})
+            SELECT id, ${REVIEW_COMMENT_INSERT_PLACEHOLDERS}
+            FROM file_reviews WHERE job_id = $1 AND file_path = $21`,
+      params: [jobId, ...reviewCommentInsertValues(comment), input.filePath],
+    })),
+  ]);
 }
 
 export async function recordRetryableFileReviewFailure(
@@ -176,10 +176,12 @@ export async function recordRetryableFileReviewFailure(
     countsAsAttempt?: boolean;
   },
 ) {
-  return await queryTransaction(env, async (tx) => {
-    const [review] = await tx.query<{ id: string; transient_error_count: number }>(
+  await queryBatch(env, [
+    {
+      sql:
       `
         INSERT INTO file_reviews (
+          id,
           job_id,
           file_path,
           file_status,
@@ -198,26 +200,26 @@ export async function recordRetryableFileReviewFailure(
           error_msg,
           transient_error_count
         )
-        VALUES ($1::uuid, $2, 'failed', $3, $4, $5, $6, NULL, NULL, NULL, $7, NULL, NULL, NULL, NULL, $8, $9::int)
+        VALUES ($1, $2, $3, 'failed', $4, $5, $6, $7, NULL, NULL, NULL, $8, NULL, NULL, NULL, NULL, $9, $10)
         ON CONFLICT (job_id, file_path) DO UPDATE SET
           file_status = 'failed',
-          model_used = EXCLUDED.model_used,
-          model_provider = EXCLUDED.model_provider,
-          diff_line_count = EXCLUDED.diff_line_count,
-          diff_input = EXCLUDED.diff_input,
+          model_used = excluded.model_used,
+          model_provider = excluded.model_provider,
+          diff_line_count = excluded.diff_line_count,
+          diff_input = excluded.diff_input,
           raw_ai_output = NULL,
           input_tokens = NULL,
           output_tokens = NULL,
-          duration_ms = EXCLUDED.duration_ms,
+          duration_ms = excluded.duration_ms,
           verdict = NULL,
           file_summary = NULL,
           overall_correctness = NULL,
           confidence_score = NULL,
-          error_msg = EXCLUDED.error_msg,
-          transient_error_count = file_reviews.transient_error_count + $9::int
-        RETURNING id, transient_error_count
+          error_msg = excluded.error_msg,
+          transient_error_count = file_reviews.transient_error_count + $10
       `,
-      [
+      params: [
+        newId(),
         jobId,
         input.filePath,
         input.modelUsed,
@@ -228,11 +230,20 @@ export async function recordRetryableFileReviewFailure(
         input.errorMessage,
         input.countsAsAttempt === false ? 0 : 1,
       ],
-    );
+    },
+    {
+      sql: `DELETE FROM review_comments
+            WHERE file_review_id = (SELECT id FROM file_reviews WHERE job_id = $1 AND file_path = $2)`,
+      params: [jobId, input.filePath],
+    },
+  ]);
 
-    await tx.query('DELETE FROM review_comments WHERE file_review_id = $1::uuid', [review.id]);
-    return review.transient_error_count;
-  });
+  const [review] = await queryRows<{ transient_error_count: number }>(
+    env,
+    'SELECT transient_error_count FROM file_reviews WHERE job_id = $1 AND file_path = $2',
+    [jobId, input.filePath],
+  );
+  return Number(review?.transient_error_count ?? 0);
 }
 
 
@@ -249,11 +260,11 @@ export async function getModelUsageStats(env: DbEnv, days: number) {
       SELECT
         model_used,
         MIN(model_provider) AS model_provider,
-        COUNT(*)::int AS calls,
-        COALESCE(SUM(input_tokens), 0)::int AS input_tokens,
-        COALESCE(SUM(output_tokens), 0)::int AS output_tokens
+        COUNT(*) AS calls,
+        COALESCE(SUM(input_tokens), 0) AS input_tokens,
+        COALESCE(SUM(output_tokens), 0) AS output_tokens
       FROM file_reviews
-      WHERE created_at >= now() - ($1::int * interval '1 day')
+      WHERE created_at >= strftime('%Y-%m-%dT%H:%M:%fZ', 'now', '-' || $1 || ' days')
       GROUP BY model_used
       ORDER BY calls DESC, model_used ASC
       LIMIT 20
@@ -297,10 +308,10 @@ export async function getFileReviewsForJobs(env: DbEnv, jobIds: string[]) {
         fr.*,
         ${reviewCommentsAggregate()} AS parsed_comments
       FROM file_reviews fr
-      WHERE fr.job_id = ANY($1::uuid[])
+      WHERE fr.job_id IN (SELECT value FROM json_each($1))
       ORDER BY fr.created_at ASC
     `,
-    [jobIds],
+    [JSON.stringify(jobIds)],
   );
 
   return rows.map((row) => ({
@@ -309,4 +320,3 @@ export async function getFileReviewsForJobs(env: DbEnv, jobIds: string[]) {
     withheld_counts: parseJsonColumn(row.withheld_counts, {} as { evidence?: number; claimDenied?: number }),
   }));
 }
-

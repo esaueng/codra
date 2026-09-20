@@ -8,7 +8,7 @@ declare interface Env {
   REVIEW_QUEUE: Queue<any>;
   REVIEW_WORKFLOW: Workflow;
   ASSETS: Fetcher;
-  HYPERDRIVE: Hyperdrive;
+  DB: D1Database;
   APP_PRIVATE_KEY: string;
   GITHUB_APP_ID: string;
   GITHUB_APP_WEBHOOK_SECRET: string;

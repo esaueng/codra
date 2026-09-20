@@ -20,7 +20,7 @@ Codra is an npm workspace monorepo. The repository is structured into `apps/` (d
 packages/
 ├── schema/             # Shared types + zod contracts (zero dependencies)
 ├── core/               # Review engine (pure ports, depends on schema)
-├── db/                 # Postgres interactions and migrations (depends on schema, core)
+├── db/                 # Cloudflare D1 interactions and migrations (depends on schema, core)
 ├── models/             # LLM provider integrations (depends on schema, core)
 ├── provider-github/    # GitHub API adapter (depends on schema, core)
 ├── api/                # Hono router and API routes (depends on schema, core, db, models, provider-github)
@@ -42,7 +42,7 @@ Codra is a monorepo-style project built with **Hono** (Worker), **React** (Vite)
 ### 1. Prerequisites
 - [Node.js](https://nodejs.org/) (Latest LTS)
 - [Wrangler CLI](https://developers.cloudflare.com/workers/wrangler/install-upgrading/) (`npm install -g wrangler`)
-- A Postgres-compatible database and a Cloudflare Hyperdrive config.
+- A Cloudflare account with D1 enabled.
 
 ### 2. Installation
 ```bash
@@ -61,12 +61,12 @@ You will need to set up:
 - A GitHub OAuth App (for dashboard authentication).
 - `LLM_CONFIG_ENCRYPTION_KEY` for encrypting dashboard-managed provider API keys.
 - LLM providers and model credentials from the Settings dashboard.
-- A Hyperdrive local connection string for `wrangler dev`.
-- A direct `DATABASE_URL` for migrations.
+- A D1 database binding in `apps/worker/wrangler.jsonc` (the setup script creates it).
 
 ### 4. Running Locally
-Codra uses `concurrently` to run the Vite frontend and the Wrangler worker simultaneously:
+Apply the local D1 migrations, then run the Vite frontend and Wrangler worker:
 ```bash
+npm run migrate:local
 npm run dev
 ```
 - Frontend: `http://localhost:5173` (proxied via Worker)
@@ -76,9 +76,7 @@ npm run dev
 
 ## 🧪 Testing
 
-We use **Vitest** for unit and integration testing. `npm test` requires a disposable Postgres database, runs migrations against it, and then runs the full test suite.
-
-The test runner loads `.env.test`, `.env.local`, `.env`, `.dev.vars`, and then `.env.test.example`. Override `TEST_DATABASE_URL` in one of the private env files when your local test database does not match the example URL.
+We use **Vitest** for unit and integration testing. `npm test` starts an isolated in-process D1 database with Miniflare, applies the schema, and runs the full test suite.
 
 ```bash
 # Run the full test suite

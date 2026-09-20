@@ -32,7 +32,7 @@ export function spawnAsync(command, args, options = {}) {
 }
 
 export function extractId(output) {
-  const match = output.match(/[a-f0-9]{32}/);
+  const match = output.match(/[a-f0-9]{8}-[a-f0-9]{4}-[a-f0-9]{4}-[a-f0-9]{4}-[a-f0-9]{12}|[a-f0-9]{32}/i);
   return match ? match[0] : null;
 }
 

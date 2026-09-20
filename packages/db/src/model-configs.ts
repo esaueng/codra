@@ -1,6 +1,6 @@
 import type { DbEnv } from './env';
 
-import { queryRows } from './client';
+import { newId, queryBatch, queryRows, SQL_NOW } from './client';
 import { PROVIDER_COLUMNS, MODEL_SELECT } from './constants';
 import {
   KIMI_K2_5_MODEL,
@@ -43,7 +43,7 @@ function mapProvider(row: ProviderRow): LlmProvider {
     name: row.name,
     apiFormat: row.api_format,
     baseUrl: row.base_url,
-    enabled: row.enabled,
+    enabled: Boolean(row.enabled),
     hasApiKey: Boolean(row.encrypted_api_key),
     createdAt: row.created_at,
     updatedAt: row.updated_at,
@@ -111,11 +111,11 @@ export async function createLlmProvider(
   const [row] = await queryRows<ProviderRow>(
     env,
     `
-    INSERT INTO llm_providers (name, api_format, base_url, encrypted_api_key, enabled, updated_at)
-    VALUES ($1, $2, $3, $4, $5, now())
+    INSERT INTO llm_providers (id, name, api_format, base_url, encrypted_api_key, enabled, updated_at)
+    VALUES ($1, $2, $3, $4, $5, $6, ${SQL_NOW})
     RETURNING ${PROVIDER_COLUMNS}
     `,
-    [input.name, input.apiFormat, input.baseUrl, input.encryptedApiKey, input.enabled],
+    [newId(), input.name, input.apiFormat, input.baseUrl, input.encryptedApiKey, input.enabled],
   );
   return mapProvider(row);
 }
@@ -156,7 +156,7 @@ export async function updateLlmProvider(
       api_format = $3,
       base_url = $4,
       enabled = $5,
-      updated_at = now()
+      updated_at = ${SQL_NOW}
       ${apiKeySql}
     WHERE id = $1
     RETURNING ${PROVIDER_COLUMNS}
@@ -169,7 +169,7 @@ export async function updateLlmProvider(
 export async function deleteLlmProvider(env: DbEnv, id: string) {
   const [{ count }] = await queryRows<{ count: string }>(
     env,
-    `SELECT COUNT(*)::text AS count FROM model_configs WHERE provider_id = $1`,
+    `SELECT CAST(COUNT(*) AS TEXT) AS count FROM model_configs WHERE provider_id = $1`,
     [id],
   );
   if (Number(count) > 0) {
@@ -226,7 +226,7 @@ export async function getResolvedModelConfig(
   if (!row) return null;
   return {
     ...mapModelConfig(row),
-    providerEnabled: row.provider_enabled,
+    providerEnabled: Boolean(row.provider_enabled),
     baseUrl: row.base_url,
     encryptedApiKey: row.encrypted_api_key,
   };
@@ -236,33 +236,38 @@ export async function updateModelConfig(
   env: DbEnv,
   config: Omit<ModelConfig, 'updatedAt' | 'providerName' | 'apiFormat'>,
 ) {
-  const [row] = await queryRows<ModelConfigRow>(
+  await queryRows(
     env,
     `
-    WITH upserted AS (
-      INSERT INTO model_configs (model_id, provider_id, model_name, provider, updated_at)
-      SELECT $1, p.id, $3, p.api_format, now()
+    INSERT INTO model_configs (model_id, provider_id, model_name, provider, updated_at)
+      SELECT $1, p.id, $3, p.api_format, ${SQL_NOW}
       FROM llm_providers p
       WHERE p.id = $2
       ON CONFLICT (model_id)
       DO UPDATE SET
-        provider_id = EXCLUDED.provider_id,
-        model_name = EXCLUDED.model_name,
-        provider = EXCLUDED.provider,
-        updated_at = now()
-      RETURNING model_id, provider_id, model_name, updated_at
-    )
-    SELECT
-      u.model_id,
-      u.provider_id,
-      p.name AS provider_name,
-      p.api_format,
-      u.model_name,
-      u.updated_at
-    FROM upserted u
-    JOIN llm_providers p ON p.id = u.provider_id
+        provider_id = excluded.provider_id,
+        model_name = excluded.model_name,
+        provider = excluded.provider,
+        updated_at = ${SQL_NOW}
     `,
     [config.modelId, config.providerId, config.modelName],
+  );
+
+  const [row] = await queryRows<ModelConfigRow>(
+    env,
+    `
+    SELECT
+      mc.model_id,
+      mc.provider_id,
+      p.name AS provider_name,
+      p.api_format,
+      mc.model_name,
+      mc.updated_at
+    FROM model_configs mc
+    JOIN llm_providers p ON p.id = mc.provider_id
+    WHERE mc.model_id = $1
+    `,
+    [config.modelId],
   );
   return row ? mapModelConfig(row) : null;
 }
@@ -335,42 +340,32 @@ export async function upsertDiscoveredModelConfigs(
 
   if (rowsToInsert.length === 0) return [];
 
-  const modelIds = rowsToInsert.map(row => row.model_id);
-  const providerIds = rowsToInsert.map(row => row.provider_id);
-  const modelNames = rowsToInsert.map(row => row.model_name);
-  const providers = rowsToInsert.map(row => row.provider);
+  await queryBatch(
+    env,
+    rowsToInsert.map((row) => ({
+      sql: `INSERT INTO model_configs (model_id, provider_id, model_name, provider, updated_at)
+            VALUES ($1, $2, $3, $4, ${SQL_NOW})
+            ON CONFLICT (model_id) DO NOTHING`,
+      params: [row.model_id, row.provider_id, row.model_name, row.provider],
+    })),
+  );
 
   const rows = await queryRows<ModelConfigRow>(
     env,
     `
-    WITH incoming AS (
-      SELECT *
-      FROM unnest(
-        $1::text[],
-        $2::uuid[],
-        $3::text[],
-        $4::text[]
-      ) AS item(model_id, provider_id, model_name, provider)
-    ),
-    inserted AS (
-      INSERT INTO model_configs (model_id, provider_id, model_name, provider, updated_at)
-      SELECT model_id, provider_id, model_name, provider, now()
-      FROM incoming
-      ON CONFLICT (model_id) DO NOTHING
-      RETURNING model_id, provider_id, model_name, updated_at
-    )
     SELECT
-      i.model_id,
-      i.provider_id,
+      mc.model_id,
+      mc.provider_id,
       p.name AS provider_name,
       p.api_format,
-      i.model_name,
-      i.updated_at
-    FROM inserted i
-    JOIN llm_providers p ON p.id = i.provider_id
-    ORDER BY i.model_id ASC
+      mc.model_name,
+      mc.updated_at
+    FROM model_configs mc
+    JOIN llm_providers p ON p.id = mc.provider_id
+    WHERE mc.model_id IN (SELECT value FROM json_each($1))
+    ORDER BY mc.model_id ASC
     `,
-    [modelIds, providerIds, modelNames, providers],
+    [JSON.stringify(rowsToInsert.map((row) => row.model_id))],
   );
 
   return rows.map(mapModelConfig);

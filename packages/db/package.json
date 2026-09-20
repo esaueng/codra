@@ -1,7 +1,7 @@
 {
   "name": "@codraoss/db",
   "version": "0.9.5",
-  "description": "Codra's Postgres persistence layer behind repository interfaces.",
+  "description": "Codra's Cloudflare D1 persistence layer behind repository interfaces.",
   "author": "Devarshi Shimpi",
   "license": "AGPL-3.0-only",
   "homepage": "https://codra.run",
@@ -25,8 +25,7 @@
   },
   "files": [
     "dist",
-    "migrations",
-    "scripts",
+    "migrations-d1",
     "LICENSE",
     "README.md"
   ],
@@ -68,8 +67,7 @@
   },
   "dependencies": {
     "@codraoss/schema": "^0.9.5",
-    "@codraoss/core": "^0.9.5",
-    "postgres": "^3.4.9"
+    "@codraoss/core": "^0.9.5"
   },
   "devDependencies": {
     "@types/node": "^22.0.0",

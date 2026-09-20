@@ -1,5 +1,5 @@
 import type { DbEnv } from './env';
-import { parseJsonColumn, queryRows } from './client';
+import { newId, parseJsonColumn, queryRows } from './client';
 
 export async function recordWebhookDelivery(
   env: DbEnv,
@@ -27,12 +27,12 @@ export async function recordWebhookDelivery(
   const rows = await queryRows<{ id: string }>(
     env,
     `
-      INSERT INTO webhook_deliveries (delivery_id, event_name, repository_id, payload)
-      VALUES ($1, $2, $3, $4::text::jsonb)
+      INSERT INTO webhook_deliveries (id, delivery_id, event_name, repository_id, payload)
+      VALUES ($1, $2, $3, $4, $5)
       ON CONFLICT (delivery_id) DO NOTHING
       RETURNING id
     `,
-    [input.deliveryId, input.eventName, repositoryId, JSON.stringify(input.payload)],
+    [newId(), input.deliveryId, input.eventName, repositoryId, JSON.stringify(input.payload)],
   );
 
   // Returned rather than discarded so callers that need it (the feedback handler) don't pay for a second identical lookup.

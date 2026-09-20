@@ -47,7 +47,7 @@ Codra listens to GitHub pull request events, runs AI-powered review jobs, posts 
 - Inline GitHub review comments plus summary reviews and check run updates
 - Queue-backed processing through Cloudflare Queues
 - GitHub OAuth dashboard authentication
-- External PostgreSQL storage through Cloudflare Hyperdrive
+- Cloudflare-native relational storage through D1
 - Dashboard-managed LLM providers for OpenAI, OpenRouter, Anthropic, Google, NVIDIA, and Cloudflare models
 - Repository settings for labels, skipped globs, custom rules, and model routing
 
@@ -55,7 +55,7 @@ Codra listens to GitHub pull request events, runs AI-powered review jobs, posts 
 
 1. GitHub sends Codra a pull request webhook.
 2. Codra verifies the signature and loads repository review settings.
-3. A review job is stored in PostgreSQL and queued on Cloudflare Queues.
+3. A review job is stored in D1 and queued on Cloudflare Queues.
 4. The Worker consumes the job, fetches the PR diff, runs model review passes, and formats findings.
 5. Codra posts inline comments and a summary review back to GitHub.
 6. The dashboard keeps the job history, findings, logs, and stats available for operators.
@@ -64,7 +64,7 @@ Codra listens to GitHub pull request events, runs AI-powered review jobs, posts 
 
 - **Worker**: Cloudflare Workers, Hono, Wrangler
 - **Dashboard**: React, Vite, Tailwind CSS, Radix UI, Recharts
-- **Data**: PostgreSQL, Cloudflare Hyperdrive, Cloudflare KV
+- **Data**: Cloudflare D1 and Cloudflare KV
 - **Queues**: Cloudflare Queues and Workflows
 - **Models**: OpenAI, OpenRouter, Anthropic, Google, NVIDIA, and Cloudflare providers
 - **GitHub**: GitHub App webhooks, checks, reviews, and OAuth
@@ -76,10 +76,15 @@ The full setup and operations guides live at [codra.run/docs](https://codra.run/
 
 - [Installation guide](https://codra.run/docs/installation)
 - [Configuration guide](https://codra.run/docs/configuration)
-- [Deploy with Neon](https://codra.run/docs/neon)
-- [Deploy with Railway](https://codra.run/docs/railway)
 - [Contributing](CONTRIBUTING.md)
 - [Security policy](SECURITY.md)
+
+## Cloudflare D1 deployment
+
+Run `npm run setup:cloudflare` once to create the D1 database and write its binding to
+`apps/worker/wrangler.jsonc`. Then `npm run deploy` builds the app, applies pending D1 migrations,
+and deploys the Worker. The D1 schema is a fresh datastore; this repository does not automatically
+copy data from an existing PostgreSQL deployment.
 
 ## Contributing
 

@@ -5,9 +5,8 @@ import type { DbEnv } from '@codraoss/db/env';
 
 export function makeFileReviewStore(env: AppBindings): FileReviewStore {
   const dbEnv: DbEnv = {
-    HYPERDRIVE: env.HYPERDRIVE,
+    DB: env.DB,
     APP_KV: env.APP_KV,
-    workerMode: true,
   };
   return makeDbFileReviewStore(dbEnv);
 }

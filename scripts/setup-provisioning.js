@@ -97,24 +97,24 @@ export async function handleKVNamespace(baseBinding, isPreview) {
 }
 
 
-export async function handleHyperdrive(dbUrl) {
-  let currentBinding = 'codra-db';
+export async function handleD1Database(initialName = 'codra-db') {
+  let currentName = initialName;
   
   while (true) {
-    const spinner = ora(`Creating Hyperdrive (${currentBinding})...`).start();
+    const spinner = ora(`Creating D1 database (${currentName})...`).start();
     try {
-      const { stdout } = await spawnAsync('npx', ['wrangler', 'hyperdrive', 'create', currentBinding, `--connection-string=${dbUrl}`]);
+      const { stdout } = await spawnAsync('npx', ['wrangler', 'd1', 'create', currentName]);
       spinner.succeed();
       return extractId(stdout);
     } catch (error) {
       const errorMsg = error.stderr || error.message;
       if (errorMsg.includes('already exists') || errorMsg.includes('code: 2017')) {
-        spinner.warn(`Hyperdrive config "${currentBinding}" already exists.`);
+        spinner.warn(`D1 database "${currentName}" already exists.`);
         
         const { action } = await prompts({
           type: 'select',
           name: 'action',
-          message: `How would you like to handle this existing Hyperdrive?`,
+          message: `How would you like to handle this existing D1 database?`,
           choices: [
             { title: 'Auto-fetch existing ID', value: 'fetch' },
             { title: 'Manually enter ID', value: 'manual' },
@@ -124,9 +124,9 @@ export async function handleHyperdrive(dbUrl) {
         }, { onCancel: () => process.exit(1) });
 
         if (action === 'fetch') {
-           const fetchSpinner = ora('Fetching existing Hyperdrive configs...').start();
+           const fetchSpinner = ora('Fetching existing D1 databases...').start();
            try {
-             const { stdout: listOut } = await execAsync('npx wrangler hyperdrive list', { cwd: WORKER_DIR });
+             const { stdout: listOut } = await execAsync('npx wrangler d1 list --json', { cwd: WORKER_DIR });
              fetchSpinner.succeed();
              
              let parsed = null;
@@ -136,16 +136,17 @@ export async function handleHyperdrive(dbUrl) {
              } catch { /* not JSON: fall through to the non-parsed path below */ }
 
              if (parsed && Array.isArray(parsed)) {
-                const found = parsed.find(hd => hd.name === currentBinding);
+                const found = parsed.find(db => db.name === currentName);
                 if (found) {
-                  console.log(chalk.green(`  ✅ Found existing ID: ${found.id}`));
-                  return found.id;
+                  const id = found.uuid ?? found.id;
+                  console.log(chalk.green(`  ✅ Found existing ID: ${id}`));
+                  return id;
                 }
              } else {
                 const lines = listOut.split('\n');
                 for (const line of lines) {
-                  if (line.includes(currentBinding)) {
-                    const match = line.match(/[a-f0-9]{32}/);
+                  if (line.includes(currentName)) {
+                    const match = line.match(/[a-f0-9-]{36}/);
                     if (match) {
                       console.log(chalk.green(`  ✅ Found existing ID: ${match[0]}`));
                       return match[0];
@@ -154,24 +155,24 @@ export async function handleHyperdrive(dbUrl) {
                 }
              }
              
-             console.log(chalk.yellow(`  ⚠️ Could not automatically find an ID matching ${currentBinding}.`));
-             const { manualId } = await prompts({ type: 'text', name: 'manualId', message: 'Enter the Hyperdrive ID manually:'}, { onCancel: () => process.exit(1) });
+             console.log(chalk.yellow(`  ⚠️ Could not automatically find an ID matching ${currentName}.`));
+             const { manualId } = await prompts({ type: 'text', name: 'manualId', message: 'Enter the D1 database ID manually:'}, { onCancel: () => process.exit(1) });
              if (manualId) return manualId;
              return null;
            } catch(e) {
-             fetchSpinner.fail('Failed to fetch Hyperdrive configs.');
-             const { manualId } = await prompts({ type: 'text', name: 'manualId', message: 'Enter the Hyperdrive ID manually:'}, { onCancel: () => process.exit(1) });
+             fetchSpinner.fail('Failed to fetch D1 databases.');
+             const { manualId } = await prompts({ type: 'text', name: 'manualId', message: 'Enter the D1 database ID manually:'}, { onCancel: () => process.exit(1) });
              if (manualId) return manualId;
              return null;
            }
         } else if (action === 'manual') {
-          const { manualId } = await prompts({ type: 'text', name: 'manualId', message: 'Enter the Hyperdrive ID:'}, { onCancel: () => process.exit(1) });
+          const { manualId } = await prompts({ type: 'text', name: 'manualId', message: 'Enter the D1 database ID:'}, { onCancel: () => process.exit(1) });
           if (manualId) return manualId;
           return null;
         } else if (action === 'new') {
-          const { newName } = await prompts({ type: 'text', name: 'newName', message: 'Enter a new Hyperdrive name (e.g. codra-db-2):', initial: `${currentBinding}-2`}, { onCancel: () => process.exit(1) });
+          const { newName } = await prompts({ type: 'text', name: 'newName', message: 'Enter a new D1 database name:', initial: `${currentName}-2`}, { onCancel: () => process.exit(1) });
           if (newName) {
-            currentBinding = newName;
+            currentName = newName;
             continue;
           }
           return null;
@@ -180,11 +181,10 @@ export async function handleHyperdrive(dbUrl) {
         }
       } else {
         spinner.fail();
-        console.error(chalk.red(`\n❌ Error executing Hyperdrive creation.`));
+        console.error(chalk.red(`\n❌ Error creating D1 database.`));
         console.error(chalk.red(errorMsg));
         process.exit(1);
       }
     }
   }
 }
-

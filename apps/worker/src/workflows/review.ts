@@ -6,7 +6,7 @@ import { CloudflareOrchestrator } from '../ports/cloudflare-orchestrator';
 
 export class ReviewWorkflow extends WorkflowEntrypoint<AppBindings, ReviewJobMessage> {
   async run(event: WorkflowEvent<ReviewJobMessage>, step: WorkflowStep) {
-    // One DB client for the whole invocation, instead of a Hyperdrive connection per query; a replay after step.sleep just runs this again for the new invocation.
+    // One D1 binding for the whole invocation; a replay after step.sleep runs this again for the new invocation.
     return runWithDb(this.env, () => this.execute(event, step));
   }
 

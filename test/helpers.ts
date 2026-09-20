@@ -93,12 +93,8 @@ export class MockWorkflow {
   }
 }
 
-function usableEnvValue(value: string | undefined) {
-  return value && value !== 'undefined' && value !== 'null' ? value : null;
-}
-
 function requiredEnv(key: keyof NodeJS.ProcessEnv) {
-  const value = usableEnvValue(process.env[key]);
+  const value = process.env[key];
   if (!value) {
     throw new Error(`Missing required test environment variable: ${key}`);
   }
@@ -107,14 +103,6 @@ function requiredEnv(key: keyof NodeJS.ProcessEnv) {
 
 function unusedEnv(key: string): string {
   throw new Error(`${key} is not required by the current test suite. Add it to the test env only when a test exercises that path.`);
-}
-
-export function getTestDatabaseUrl() {
-  return requiredEnv('TEST_DATABASE_URL');
-}
-
-export function hasConfiguredTestDatabaseUrl() {
-  return Boolean(usableEnvValue(process.env.TEST_DATABASE_URL));
 }
 
 import { FakeIdentityProvider } from '../packages/core/test/fakes/identity-provider';
@@ -135,9 +123,7 @@ export function createTestEnv(
     REVIEW_QUEUE: new MockQueue() as any,
     REVIEW_WORKFLOW: new MockWorkflow() as any,
     ASSETS: new MockAssets() as any,
-    HYPERDRIVE: {
-      connectionString: getTestDatabaseUrl(),
-    },
+    DB: (globalThis as any).__CODRA_TEST_DB__,
     get APP_PRIVATE_KEY() { return unusedEnv('APP_PRIVATE_KEY'); },
     get GITHUB_APP_ID() { return unusedEnv('GITHUB_APP_ID'); },
     GITHUB_APP_SLUG: requiredEnv('GITHUB_APP_SLUG'),
@@ -178,7 +164,7 @@ export async function saveTestProviderApiKey(env: AppBindings, providerName = 'G
     env,
     `
     UPDATE llm_providers
-    SET encrypted_api_key = $1, enabled = TRUE, updated_at = now()
+    SET encrypted_api_key = $1, enabled = 1, updated_at = strftime('%Y-%m-%dT%H:%M:%fZ', 'now')
     WHERE name = $2
     `,
     [encrypted, providerName],
@@ -190,14 +176,14 @@ export async function saveTestProviderApiKey(env: AppBindings, providerName = 'G
         env,
         `
         INSERT INTO model_configs (model_id, provider, provider_id, model_name, updated_at)
-        SELECT $1, 'gemini', p.id, $1, now()
+        SELECT $1, 'gemini', p.id, $1, strftime('%Y-%m-%dT%H:%M:%fZ', 'now')
         FROM llm_providers p
         WHERE p.name = 'Google'
         ON CONFLICT (model_id) DO UPDATE SET
-          provider = EXCLUDED.provider,
-          provider_id = EXCLUDED.provider_id,
-          model_name = EXCLUDED.model_name,
-          updated_at = now()
+          provider = excluded.provider,
+          provider_id = excluded.provider_id,
+          model_name = excluded.model_name,
+          updated_at = strftime('%Y-%m-%dT%H:%M:%fZ', 'now')
         `,
         [modelId],
       );
@@ -242,7 +228,7 @@ export function createMockPRWebhook(overrides: any = {}) {
 
 export const sha = (seed: string) => seed.repeat(40).slice(0, 40);
 
-export const dbDescribe = hasConfiguredTestDatabaseUrl() ? describe : describe.skip;
+export const dbDescribe = describe;
 
 let nameSeq = 0;
 export function uniqueName(prefix: string) {

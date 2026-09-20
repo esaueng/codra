@@ -1,6 +1,6 @@
 import type { DbEnv } from './env';
 
-import { queryRows } from './client';
+import { queryBatch, queryRows, SQL_NOW } from './client';
 
 // 'deleted' and 'marked_wrong' are the negative signals; 'resolved' and 'marked_right' are MEASUREMENT only, since suppressing on them would train the system to stop reporting findings that worked.
 // The ABSENCE of a row is not a signal either way, so precision is only ever `marked_right / (marked_right + marked_wrong)`, reported with n.
@@ -24,26 +24,27 @@ export async function recordCommentFeedback(
 ): Promise<number> {
   if (entries.length === 0) return 0;
 
-  const rows = await queryRows<{ id: string }>(
+  const results = await queryBatch<{ id: number }>(
     env,
-    `
-      INSERT INTO comment_feedback (repository_id, pr_number, fingerprint, anchor_hash, github_comment_id, outcome, fingerprint_v2)
-      SELECT * FROM UNNEST($1::int[], $2::int[], $3::text[], $4::text[], $5::bigint[], $6::text[], $7::text[])
-      ON CONFLICT (repository_id, github_comment_id, outcome) DO NOTHING
-      RETURNING id
-    `,
-    [
-      entries.map((e) => e.repositoryId),
-      entries.map((e) => e.prNumber ?? null),
-      entries.map((e) => e.fingerprint),
-      entries.map((e) => e.anchorHash ?? null),
-      entries.map((e) => e.githubCommentId),
-      entries.map((e) => e.outcome),
-      entries.map((e) => e.fingerprintV2 ?? null),
-    ],
+    entries.map((entry) => ({
+      sql: `INSERT INTO comment_feedback
+              (repository_id, pr_number, fingerprint, anchor_hash, github_comment_id, outcome, fingerprint_v2)
+            VALUES ($1, $2, $3, $4, $5, $6, $7)
+            ON CONFLICT (repository_id, github_comment_id, outcome) DO NOTHING
+            RETURNING id`,
+      params: [
+        entry.repositoryId,
+        entry.prNumber ?? null,
+        entry.fingerprint,
+        entry.anchorHash ?? null,
+        entry.githubCommentId,
+        entry.outcome,
+        entry.fingerprintV2 ?? null,
+      ],
+    })),
   );
 
-  return rows.length;
+  return results.reduce((count, rows) => count + rows.length, 0);
 }
 
 // Targets the partial index on `(repository_id, fingerprint) WHERE source = 'dashboard'`, making a flip an UPDATE rather than two contradictory rows.
@@ -65,7 +66,7 @@ export async function upsertDashboardFeedback(
     `
       INSERT INTO comment_feedback
         (repository_id, pr_number, fingerprint, anchor_hash, github_comment_id, outcome, source, job_id, labelled_by, fingerprint_v2)
-      VALUES ($1::int, $2::int, $3::text, $4::text, NULL, $5::text, 'dashboard', $6::uuid, $7::bigint, $8::text)
+      VALUES ($1, $2, $3, $4, NULL, $5, 'dashboard', $6, $7, $8)
       ON CONFLICT (repository_id, fingerprint) WHERE source = 'dashboard'
       DO UPDATE SET
         outcome     = EXCLUDED.outcome,
@@ -74,7 +75,7 @@ export async function upsertDashboardFeedback(
         fingerprint_v2 = COALESCE(EXCLUDED.fingerprint_v2, comment_feedback.fingerprint_v2),
         job_id      = EXCLUDED.job_id,
         labelled_by = EXCLUDED.labelled_by,
-        updated_at  = now()
+        updated_at  = ${SQL_NOW}
     `,
     [
       input.repositoryId, input.prNumber, input.fingerprint, input.anchorHash,
@@ -92,7 +93,7 @@ export async function clearDashboardFeedback(
   await queryRows(
     env,
     `DELETE FROM comment_feedback
-     WHERE repository_id = $1::int AND fingerprint = $2::text AND source = 'dashboard'`,
+     WHERE repository_id = $1 AND fingerprint = $2 AND source = 'dashboard'`,
     [repositoryId, fingerprint],
   );
 }
@@ -108,10 +109,10 @@ export async function clearResolvedFeedback(
     env,
     `
       DELETE FROM comment_feedback
-      WHERE repository_id = $1::int
+      WHERE repository_id = $1
         AND outcome = 'resolved'
-        AND github_comment_id = ANY($2::bigint[])
+        AND github_comment_id IN (SELECT value FROM json_each($2))
     `,
-    [repositoryId, githubCommentIds],
+    [repositoryId, JSON.stringify(githubCommentIds)],
   );
 }

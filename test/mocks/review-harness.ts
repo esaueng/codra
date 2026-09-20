@@ -26,11 +26,11 @@ export function makeRunAndDrain(env: AppBindings) {
           const jobId = (currentMessage as { jobId?: string }).jobId;
           const repo = (currentMessage as { payload?: { repository?: { name?: string } } }).payload?.repository?.name;
           if (jobId) {
-            await queryRows(env, `UPDATE jobs SET last_queue_message_at = now() - interval '5 seconds' WHERE id = $1`, [jobId]);
+            await queryRows(env, `UPDATE jobs SET last_queue_message_at = strftime('%Y-%m-%dT%H:%M:%fZ', 'now', '-5 seconds') WHERE id = $1`, [jobId]);
           } else if (repo) {
             await queryRows(
               env,
-              `UPDATE jobs SET last_queue_message_at = now() - interval '5 seconds' WHERE repository_id IN (SELECT id FROM repositories WHERE repo = $1)`,
+              `UPDATE jobs SET last_queue_message_at = strftime('%Y-%m-%dT%H:%M:%fZ', 'now', '-5 seconds') WHERE repository_id IN (SELECT id FROM repositories WHERE repo = $1)`,
               [repo],
             );
           }
