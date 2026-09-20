@@ -74,7 +74,7 @@ dbDescribe('Async batch review flow', () => {
 
   // Backdates last_queue_message_at so claimJobLease can claim without waiting out the delay.
   async function simulateScheduledDelayElapsed(jobId: string) {
-    await queryRows(env, `UPDATE jobs SET last_queue_message_at = now() - interval '1 second' WHERE id = $1`, [jobId]);
+    await queryRows(env, `UPDATE jobs SET last_queue_message_at = strftime('%Y-%m-%dT%H:%M:%fZ', 'now', '-1 second') WHERE id = $1`, [jobId]);
   }
 
   it('submits to the async queue, stays pending across polls, then completes and finalizes', async () => {

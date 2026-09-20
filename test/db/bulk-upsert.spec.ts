@@ -87,7 +87,7 @@ dbDescribe('bulkUpsertFileReviews', () => {
       // RETURNING order isn't input order; a positional join would mismatch files.
       expect(row.parsed_comments[0].title).toBe(`Finding in ${path}`);
       expect(row.parsed_comments[0].path).toBe(path);
-      // Without ::jsonb cast this reads as NULL via ->>'evidence'.
+      // Prove the D1 JSON value is readable rather than double-encoded text.
       expect(typeof row.withheld_counts).toBe('object');
       expect(row.withheld_counts).toEqual({ evidence: 5, claimDenied: 2 });
     }

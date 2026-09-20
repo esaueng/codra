@@ -3,7 +3,7 @@ import { queryRows } from './client';
 
 export type RepositoryRow = {
   id: number;
-  installation_id: string; // BIGINT is returned as string by node-postgres
+  installation_id: string;
   owner: string;
   repo: string;
 };
@@ -17,7 +17,7 @@ export async function getOrCreateRepository(
     `
       INSERT INTO repositories (installation_id, owner, repo)
       VALUES ($1, $2, $3)
-      ON CONFLICT (owner, repo) DO UPDATE SET installation_id = EXCLUDED.installation_id
+      ON CONFLICT (owner, repo) DO UPDATE SET installation_id = excluded.installation_id
       RETURNING id
     `,
     [input.installationId, input.owner, input.repo]

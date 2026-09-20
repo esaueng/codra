@@ -69,7 +69,7 @@ dbDescribe('resumable queue primitives', () => {
     });
 
     await claimJobLease(env, job.id, 'lease-a', 600);
-    await getDb(env).query(`UPDATE jobs SET lease_expires_at = now() - interval '1 minute' WHERE id = $1`, [job.id]);
+    await getDb(env).query(`UPDATE jobs SET lease_expires_at = strftime('%Y-%m-%dT%H:%M:%fZ', 'now', '-1 minute') WHERE id = $1`, [job.id]);
 
     const reclaimed = await claimJobLease(env, job.id, 'lease-b', 600);
     expect(reclaimed.status).toBe('claimed');
@@ -95,11 +95,11 @@ dbDescribe('resumable queue primitives', () => {
 
     await claimJobLease(env, job.id, 'lease-a', 600);
     await getDb(env).query(
-      `UPDATE jobs SET lease_expires_at = now() - interval '1 minute', recovery_count = 3 WHERE id = $1`,
+      `UPDATE jobs SET lease_expires_at = strftime('%Y-%m-%dT%H:%M:%fZ', 'now', '-1 minute'), recovery_count = 3 WHERE id = $1`,
       [job.id],
     );
 
-    // Scoped to this job: the sweep is table-wide with LIMIT 25 + SKIP LOCKED, so with
+    // Scoped to this job: the sweep is table-wide with LIMIT 25, so with
     // fileParallelism the stale 'running' rows of concurrent suites could crowd it out.
     const recovered = await recoverExpiredJobLeases(env, 3, 300, [job.id]);
     expect(recovered.failedJobs.map((row) => row.id)).toContain(job.id);
@@ -129,8 +129,8 @@ dbDescribe('resumable queue primitives', () => {
         UPDATE jobs
         SET lease_owner = NULL,
             lease_expires_at = NULL,
-            heartbeat_at = now() - interval '5 minutes',
-            last_queue_message_at = now() - interval '5 minutes'
+            heartbeat_at = strftime('%Y-%m-%dT%H:%M:%fZ', 'now', '-5 minutes'),
+            last_queue_message_at = strftime('%Y-%m-%dT%H:%M:%fZ', 'now', '-5 minutes')
         WHERE id = $1
       `,
       [job.id],
@@ -165,8 +165,8 @@ dbDescribe('resumable queue primitives', () => {
     await getDb(env).query(
       `
         UPDATE jobs
-        SET heartbeat_at = now() - interval '10 minutes',
-            last_queue_message_at = now() - interval '10 minutes'
+        SET heartbeat_at = strftime('%Y-%m-%dT%H:%M:%fZ', 'now', '-10 minutes'),
+            last_queue_message_at = strftime('%Y-%m-%dT%H:%M:%fZ', 'now', '-10 minutes')
         WHERE id = $1
       `,
       [job.id],

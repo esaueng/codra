@@ -1,6 +1,6 @@
 import type { DbEnv } from './env';
 import type { SuppressedFinding } from '@codraoss/core/ports';
-import { queryRows } from './client';
+import { queryBatch, queryRows } from './client';
 
 export type { SuppressedFinding } from '@codraoss/core/ports';
 
@@ -10,11 +10,11 @@ export async function getSuppressedFindings(
   env: DbEnv,
   jobId: string,
 ): Promise<SuppressedFinding[]> {
-  return queryRows<SuppressedFinding>(
+  const rows = await queryRows<SuppressedFinding & { anchored: boolean | number }>(
     env,
     `
       WITH me AS (
-        SELECT repository_id, pr_number, commit_sha FROM jobs WHERE id = $1::uuid
+        SELECT repository_id, pr_number, commit_sha FROM jobs WHERE id = $1
       ),
       already_posted AS (
         SELECT DISTINCT rc.fingerprint, rc.anchor_hash, rc.fingerprint_v2
@@ -22,26 +22,27 @@ export async function getSuppressedFindings(
         JOIN jobs            j  ON j.repository_id = me.repository_id AND j.pr_number = me.pr_number
         JOIN file_reviews    fr ON fr.job_id = j.id
         JOIN review_comments rc ON rc.file_review_id = fr.id
-        WHERE j.id <> $1::uuid
+        WHERE j.id <> $1
           AND j.commit_sha <> me.commit_sha
-          AND rc.posted
+          AND rc.posted = 1
           -- Either identity is enough: v1 alone misses reworded repeats.
           AND (rc.fingerprint IS NOT NULL OR rc.fingerprint_v2 IS NOT NULL)
       ),
       rejected AS (
         -- Only NEGATIVE outcomes: suppressing on 'resolved'/'marked_right' would silence findings that turned out correct, and "no row" is not a negative signal.
-        SELECT DISTINCT cf.fingerprint, NULL::text AS anchor_hash, cf.fingerprint_v2
+        SELECT DISTINCT cf.fingerprint, NULL AS anchor_hash, cf.fingerprint_v2
         FROM me
         JOIN comment_feedback cf ON cf.repository_id = me.repository_id
         WHERE cf.outcome IN ('deleted', 'marked_wrong')
           AND (cf.fingerprint IS NOT NULL OR cf.fingerprint_v2 IS NOT NULL)
       )
-      SELECT fingerprint, anchor_hash, fingerprint_v2, TRUE  AS anchored FROM already_posted
+      SELECT fingerprint, anchor_hash, fingerprint_v2, 1 AS anchored FROM already_posted
       UNION ALL
-      SELECT fingerprint, anchor_hash, fingerprint_v2, FALSE AS anchored FROM rejected
+      SELECT fingerprint, anchor_hash, fingerprint_v2, 0 AS anchored FROM rejected
     `,
     [jobId],
   );
+  return rows.map((row) => ({ ...row, anchored: Boolean(row.anchored) }));
 }
 
 // Job scoping is the authorization boundary, not a convenience: a label writes a REPOSITORY-WIDE suppression.
@@ -57,7 +58,7 @@ export async function getFindingLabelTarget(
       FROM jobs j
       JOIN file_reviews    fr ON fr.job_id = j.id
       JOIN review_comments rc ON rc.file_review_id = fr.id
-      WHERE j.id = $1::uuid AND rc.fingerprint = $2::text
+      WHERE j.id = $1 AND rc.fingerprint = $2
       LIMIT 1
     `,
     [jobId, fingerprint],
@@ -75,14 +76,12 @@ export async function markCommentsPosted(
   await queryRows(
     env,
     `
-      UPDATE review_comments rc
-      SET posted = TRUE, disposition = 'posted'
-      FROM file_reviews fr
-      WHERE fr.id = rc.file_review_id
-        AND fr.job_id = $1::uuid
-        AND rc.fingerprint = ANY($2::text[])
+      UPDATE review_comments
+      SET posted = 1, disposition = 'posted'
+      WHERE file_review_id IN (SELECT id FROM file_reviews WHERE job_id = $1)
+        AND fingerprint IN (SELECT value FROM json_each($2))
     `,
-    [jobId, fingerprints],
+    [jobId, JSON.stringify(fingerprints)],
   );
 }
 
@@ -93,24 +92,16 @@ export async function markCommentDispositions(
   byFingerprint: Map<string, { disposition: string | null; reason: string | null }>,
 ): Promise<void> {
   if (byFingerprint.size === 0) return;
-  const fingerprints = [...byFingerprint.keys()];
-  const dispositions = fingerprints.map((fp) => byFingerprint.get(fp)!.disposition);
-  const reasons = fingerprints.map((fp) => byFingerprint.get(fp)!.reason);
-
   // A posted finding's disposition is never rewritten: fingerprint collisions on same-titled findings once overwrote a real P0's 'posted' with 'suppression'. `posted` is GitHub's fact; disposition is our inference, so the fact wins.
-  await queryRows(
+  await queryBatch(
     env,
-    `
-      UPDATE review_comments rc
-      SET disposition   = CASE WHEN rc.posted THEN rc.disposition
-                               ELSE COALESCE(d.disposition, rc.disposition) END,
-          verify_reason = COALESCE(d.reason, rc.verify_reason)
-      FROM file_reviews fr,
-           UNNEST($2::text[], $3::text[], $4::text[]) AS d(fingerprint, disposition, reason)
-      WHERE fr.id = rc.file_review_id
-        AND fr.job_id = $1::uuid
-        AND rc.fingerprint = d.fingerprint
-    `,
-    [jobId, fingerprints, dispositions, reasons],
+    [...byFingerprint].map(([fingerprint, decision]) => ({
+      sql: `UPDATE review_comments
+            SET disposition = CASE WHEN posted = 1 THEN disposition ELSE COALESCE($3, disposition) END,
+                verify_reason = COALESCE($4, verify_reason)
+            WHERE file_review_id IN (SELECT id FROM file_reviews WHERE job_id = $1)
+              AND fingerprint = $2`,
+      params: [jobId, fingerprint, decision.disposition, decision.reason],
+    })),
   );
 }

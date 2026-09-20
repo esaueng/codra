@@ -2,7 +2,7 @@
   "$schema": "./node_modules/wrangler/config-schema.json",
   "name": "codra",
   "main": "./src/index.ts",
-  "compatibility_date": "2026-04-16",
+  "compatibility_date": "2026-09-20",
   "compatibility_flags": [
     "nodejs_compat"
   ],
@@ -27,10 +27,12 @@
     "binding": "AI",
     "remote": true
   },
-  "hyperdrive": [
+  "d1_databases": [
     {
-      "binding": "HYPERDRIVE",
-      "id": "35b282fa80f24e67adfda063c3a839d1"
+      "binding": "DB",
+      "database_name": "codra-db",
+      "database_id": "00000000-0000-0000-0000-000000000000",
+      "migrations_dir": "../../packages/db/migrations-d1"
     }
   ],
   "kv_namespaces": [

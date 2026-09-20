@@ -33,7 +33,7 @@ export async function recoverJobs(env: AppBindings) {
 }
 
 export async function completeTerminalCheckRuns(env: AppBindings) {
-  // Limit to 1: each job needs multiple subrequests (KV, GitHub API, Hyperdrive), close to Cloudflare's 50/invocation cap.
+  // Limit to 1: each job needs multiple subrequests (KV, GitHub API, D1), close to Cloudflare's 50/invocation cap.
   const jobs = await getTerminalJobsNeedingCheckRunCompletion(env, 1);
   for (const job of jobs) {
     if (!job.check_run_id) continue;

@@ -1,6 +1,6 @@
 import type { DbEnv } from './env';
 
-import { parseJsonColumn, queryRows } from './client';
+import { newId, parseJsonColumn, queryRows, SQL_NOW } from './client';
 import { defaultRepoConfig, normalizeRepoConfig, repoConfigRecordSchema, repoConfigSchema, type RepoConfig } from '@codraoss/schema';
 import { getOrCreateRepository } from './repositories';
 
@@ -31,7 +31,7 @@ function mapRepo(row: RepoConfigRow) {
     mainModel: row.main_model,
     fallbackModels: parseJsonColumn(row.fallback_models, null),
     sizeOverrides: parseJsonColumn(row.size_overrides, null),
-    enabled: row.enabled,
+    enabled: Boolean(row.enabled),
   });
 }
 
@@ -56,18 +56,19 @@ export async function upsertRepoConfig(
   await queryRows(
     env,
     `
-      INSERT INTO repo_configs (repository_id, parsed_json, updated_at, main_model, fallback_models, size_overrides, enabled)
-      VALUES ($1, $2::text::jsonb, now(), $3, $4::text::jsonb, $5::text::jsonb, COALESCE($6, TRUE))
+      INSERT INTO repo_configs (id, repository_id, parsed_json, updated_at, main_model, fallback_models, size_overrides, enabled)
+      VALUES ($1, $2, $3, ${SQL_NOW}, $4, $5, $6, COALESCE($7, 1))
       ON CONFLICT (repository_id)
       DO UPDATE
-      SET parsed_json = EXCLUDED.parsed_json,
-          updated_at = EXCLUDED.updated_at,
-          main_model = EXCLUDED.main_model,
-          fallback_models = EXCLUDED.fallback_models,
-          size_overrides = EXCLUDED.size_overrides,
-          enabled = COALESCE($6, repo_configs.enabled)
+      SET parsed_json = excluded.parsed_json,
+          updated_at = excluded.updated_at,
+          main_model = excluded.main_model,
+          fallback_models = excluded.fallback_models,
+          size_overrides = excluded.size_overrides,
+          enabled = COALESCE($7, repo_configs.enabled)
     `,
     [
+      newId(),
       repositoryId,
       JSON.stringify(parsedJson),
       model?.main ?? null,
@@ -96,11 +97,11 @@ export async function syncRepoConfig(
   await queryRows(
     env,
     `
-      INSERT INTO repo_configs (repository_id, parsed_json, updated_at, main_model, fallback_models, size_overrides, enabled)
-      VALUES ($1, $2::text::jsonb, now(), NULL, NULL, NULL, TRUE)
+      INSERT INTO repo_configs (id, repository_id, parsed_json, updated_at, main_model, fallback_models, size_overrides, enabled)
+      VALUES ($1, $2, $3, ${SQL_NOW}, NULL, NULL, NULL, 1)
       ON CONFLICT (repository_id) DO NOTHING
     `,
-    [repositoryId, JSON.stringify(defaultRepoConfig)],
+    [newId(), repositoryId, JSON.stringify(defaultRepoConfig)],
   );
 }
 
@@ -130,10 +131,10 @@ export async function deleteStaleRepoConfigs(
       WHERE repository_id IN (
         SELECT id FROM repositories 
         WHERE installation_id = $1 
-          AND owner || '/' || repo != ALL($2::text[])
+          AND owner || '/' || repo NOT IN (SELECT value FROM json_each($2))
       )
     `,
-    [installationId, activeRepoFullNames]
+    [installationId, JSON.stringify(activeRepoFullNames)]
   );
 }
 
@@ -148,13 +149,12 @@ export async function updateRepoConfigEnabled(
   await queryRows(
     env,
     `
-      UPDATE repo_configs rc
+      UPDATE repo_configs AS rc
       SET enabled = $3,
-          updated_at = now()
-      FROM repositories r
-      WHERE rc.repository_id = r.id
-        AND r.owner = $1
-        AND r.repo = $2
+          updated_at = ${SQL_NOW}
+      WHERE rc.repository_id = (
+        SELECT id FROM repositories WHERE owner = $1 AND repo = $2
+      )
     `,
     [input.owner, input.repo, input.enabled],
   );
@@ -172,17 +172,18 @@ const REPO_CONFIG_SELECT = `
         rc.fallback_models,
         rc.size_overrides,
         rc.enabled,
-        lj.created_at AS last_job_created_at,
-        lj.verdict AS last_job_verdict
+        (
+          SELECT created_at FROM jobs
+          WHERE repository_id = r.id
+          ORDER BY created_at DESC LIMIT 1
+        ) AS last_job_created_at,
+        (
+          SELECT verdict FROM jobs
+          WHERE repository_id = r.id
+          ORDER BY created_at DESC LIMIT 1
+        ) AS last_job_verdict
       FROM repo_configs rc
       JOIN repositories r ON rc.repository_id = r.id
-      LEFT JOIN LATERAL (
-        SELECT created_at, verdict
-        FROM jobs
-        WHERE repository_id = r.id
-        ORDER BY created_at DESC
-        LIMIT 1
-      ) lj ON true
 `;
 
 export async function listRepoConfigs(env: DbEnv) {

@@ -52,7 +52,7 @@ export type AuthSessionResponse = {
   permissions?: string[];
 };
 
-// Durable account record persisted in Postgres (account_settings).
+// Durable account record persisted in D1 (account_settings).
 export type AccountSettings = {
   // Stable, unique account id (uuid) - distinct from the GitHub user id.
   id: string;
@@ -81,7 +81,7 @@ export type JobDetailResponse = {
 };
 
 /** Per-file reconstructed diff/prompt text, fetched on demand (see GET /api/jobs/:id/diffs) --
-    diff_input isn't persisted in Postgres, so this comes from KV or a fresh GitHub fetch. Files
+    diff_input isn't persisted in D1, so this comes from KV or a fresh GitHub fetch. Files
     with no entry are unavailable (e.g. the underlying commits are gone). */
 export type JobDiffsResponse = {
   diffs: Record<string, string>;

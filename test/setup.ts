@@ -1,6 +1,7 @@
 import { vi } from 'vitest';
 import { readFileSync } from 'node:fs';
 import path from 'node:path';
+import { Miniflare } from 'miniflare';
 
 // Disable telemetry during unit/integration tests to prevent polluting production metrics
 process.env.TELEMETRY_DISABLED = 'true';
@@ -15,7 +16,6 @@ const REQUIRED_TEST_ENV_KEYS = [
   'APP_URL',
   'DASHBOARD_ALLOWED_USERS',
   'BOT_USERNAME',
-  'TEST_DATABASE_URL',
 ];
 
 // Global mocks for Cloudflare environment
@@ -80,14 +80,25 @@ function assertRequiredTestEnv() {
   throw new Error([
     `Missing required test environment variables: ${missing.join(', ')}.`,
     'Set these values in .env.test, .env.local, .env, .dev.vars, .env.test.example, or CI.',
-    'TEST_DATABASE_URL must point to a disposable Postgres database so the full test suite can run.',
   ].join('\n'));
 }
 
 loadTestEnvFromFiles();
 assertRequiredTestEnv();
 
-// Database-backed review flow tests can be slow on local Postgres and CI.
+if (typeof window === 'undefined') {
+  const miniflare = new Miniflare({
+    modules: true,
+    script: 'export default { fetch() { return new Response("ok") } }',
+    d1Databases: { DB: 'codra-test' },
+  });
+  const testDb = await miniflare.getD1Database('DB');
+  const migrationSql = readFileSync(path.join(process.cwd(), 'packages/db/migrations-d1/0001_initial.sql'), 'utf8');
+  const migrationStatements = migrationSql.split(';').map((statement) => statement.trim()).filter(Boolean);
+  await testDb.batch(migrationStatements.map((statement) => testDb.prepare(statement)));
+  vi.stubGlobal('__CODRA_TEST_DB__', testDb);
+}
+
 vi.setConfig({ testTimeout: 300000 });
 
 if (typeof window !== 'undefined' && !window.matchMedia) {

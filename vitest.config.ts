@@ -18,13 +18,7 @@ export default defineConfig({
     include: ['test/**/*.spec.ts', 'test/**/*.spec.tsx'],
     passWithNoTests: true,
     setupFiles: [resolve(__dirname, './test/setup.ts')],
-    // The suite is dominated by round trips to a remote Postgres, so wall clock is latency-bound,
-    // not CPU-bound: running files concurrently overlaps the waiting. Safe because DB-backed suites
-    // isolate by unique row names (see `uniqueName`) and nothing truncates a shared table.
-    //
-    // Capped rather than unbounded. Every worker opens its own pooled connection, and a free-tier
-    // Neon project has a small connection ceiling; past it the failure is a connection error that
-    // looks like a test bug.
+    // Each worker receives an isolated in-process Miniflare D1 database.
     fileParallelism: true,
     maxWorkers: 6,
   },

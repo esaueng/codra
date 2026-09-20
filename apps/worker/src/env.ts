@@ -15,10 +15,6 @@ export interface AssetsBinding {
   fetch(input: RequestInfo | URL, init?: RequestInit): Promise<Response>;
 }
 
-export interface HyperdriveBinding {
-  connectionString: string;
-}
-
 export interface AppBindings {
   SESSION_STORE: SessionStore;
   IDENTITY_PROVIDER: IdentityProvider;
@@ -27,7 +23,7 @@ export interface AppBindings {
   REVIEW_QUEUE: QueueProducer<ReviewJobMessage>;
   REVIEW_WORKFLOW: Workflow;
   ASSETS: AssetsBinding;
-  HYPERDRIVE: HyperdriveBinding;
+  DB: D1Database;
   APP_PRIVATE_KEY: string;
   GITHUB_APP_ID: string;
   GITHUB_APP_SLUG?: string;

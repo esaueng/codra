@@ -63,7 +63,7 @@ async function invalidateAllRepoConfigCache(env: Pick<AppBindings, 'APP_KV'>) {
 
 
 export async function loadRepoConfig(
-  env: Pick<AppBindings, 'APP_KV' | 'HYPERDRIVE'>,
+  env: Pick<AppBindings, 'APP_KV' | 'DB'>,
   input: { installationId: string; owner: string; repo: string },
 ) {
   const key = await cacheKey(env, input.owner, input.repo);

@@ -22,21 +22,20 @@ export async function getRejectedExemplars(
   return queryRows<RejectedExemplar>(
     env,
     `
-      SELECT DISTINCT ON (rc.fingerprint)
-             rc.title, rc.body, rc.claim_type, rc.context_snippet, rc.path
-      FROM comment_feedback cf
-      JOIN review_comments rc
-        ON rc.fingerprint = cf.fingerprint
-        -- OR-matched, same as suppression: v1 dies the moment the model rewords a title.
-        OR (rc.fingerprint_v2 IS NOT NULL AND rc.fingerprint_v2 = cf.fingerprint_v2)
-      WHERE cf.repository_id = $1
-        AND cf.outcome IN ('deleted', 'marked_wrong')
-        AND rc.title IS NOT NULL
-        AND ($2::text[] IS NULL OR rc.claim_type = ANY($2::text[]))
-      ORDER BY rc.fingerprint, rc.id DESC
-      LIMIT $3
+      SELECT title, body, claim_type, context_snippet, path FROM (
+        SELECT rc.title, rc.body, rc.claim_type, rc.context_snippet, rc.path,
+               ROW_NUMBER() OVER (PARTITION BY rc.fingerprint ORDER BY rc.id DESC) AS rank
+        FROM comment_feedback cf
+        JOIN review_comments rc
+          ON rc.fingerprint = cf.fingerprint
+          OR (rc.fingerprint_v2 IS NOT NULL AND rc.fingerprint_v2 = cf.fingerprint_v2)
+        WHERE cf.repository_id = $1
+          AND cf.outcome IN ('deleted', 'marked_wrong')
+          AND rc.title IS NOT NULL
+          AND ($2 IS NULL OR rc.claim_type IN (SELECT value FROM json_each($2)))
+      ) WHERE rank = 1 LIMIT $3
     `,
-    [input.repositoryId, input.claimTypes?.length ? [...input.claimTypes] : null, limit],
+    [input.repositoryId, input.claimTypes?.length ? JSON.stringify(input.claimTypes) : null, limit],
   );
 }
 
@@ -47,7 +46,7 @@ export async function getRepositoryIdForJob(
 ): Promise<number | null> {
   const [row] = await queryRows<{ repository_id: number }>(
     env,
-    `SELECT repository_id FROM jobs WHERE id = $1::uuid`,
+    `SELECT repository_id FROM jobs WHERE id = $1`,
     [jobId],
   );
   return row?.repository_id ?? null;

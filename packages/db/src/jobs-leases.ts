@@ -1,5 +1,5 @@
 import type { DbEnv } from './env';
-import { queryRows } from './client';
+import { queryRows, SQL_NOW } from './client';
 import type { JobRow } from './jobs-mapping';
 import { markSystemActive } from './jobs-activity';
 
@@ -31,45 +31,36 @@ export type JobLeaseClaim =
   | { status: 'missing' };
 
 export async function claimJobLease(
-  env: Pick<DbEnv, 'HYPERDRIVE' | 'APP_KV'>,
+  env: Pick<DbEnv, 'DB' | 'APP_KV'>,
   jobId: string,
   leaseOwner: string,
   leaseSeconds: number,
 ): Promise<JobLeaseClaim> {
-  const [claimed] = await queryRows<JobRow>(
+  const [claimedRow] = await queryRows<JobRow>(
     env,
     `
-      WITH claimed AS (
-        UPDATE jobs
-        SET status = CASE WHEN status = 'queued' THEN 'running' ELSE status END,
-            started_at = COALESCE(started_at, now()),
-            lease_owner = $2,
-            lease_expires_at = now() + ($3 || ' seconds')::interval,
-            heartbeat_at = now(),
-            last_queue_message_at = now()
-        WHERE id = $1
-          AND status IN ('queued', 'running')
-          AND (
-            lease_expires_at IS NULL
-            OR lease_expires_at < now()
-            OR lease_owner = $2
-          )
-          AND NOT (
-            status = 'running'
-            AND lease_owner IS NULL
-            AND last_queue_message_at IS NOT NULL
-            AND last_queue_message_at > now()
-          )
-        RETURNING *
-      )
-      SELECT c.*, r.owner, r.repo, r.installation_id
-      FROM claimed c
-      JOIN repositories r ON c.repository_id = r.id
+      UPDATE jobs
+      SET status = CASE WHEN status = 'queued' THEN 'running' ELSE status END,
+          started_at = COALESCE(started_at, ${SQL_NOW}),
+          lease_owner = $2,
+          lease_expires_at = strftime('%Y-%m-%dT%H:%M:%fZ', 'now', '+' || $3 || ' seconds'),
+          heartbeat_at = ${SQL_NOW},
+          last_queue_message_at = ${SQL_NOW}
+      WHERE id = $1
+        AND status IN ('queued', 'running')
+        AND (lease_expires_at IS NULL OR lease_expires_at < ${SQL_NOW} OR lease_owner = $2)
+        AND NOT (
+          status = 'running' AND lease_owner IS NULL
+          AND last_queue_message_at IS NOT NULL AND last_queue_message_at > ${SQL_NOW}
+        )
+      RETURNING *
     `,
     [jobId, leaseOwner, String(leaseSeconds)],
   );
 
-  if (claimed) {
+  if (claimedRow) {
+    const claimed = await getJobForProcessing(env as DbEnv, jobId);
+    if (!claimed) return { status: 'missing' };
     await markSystemActive(env);
     return { status: 'claimed', row: claimed };
   }
@@ -95,7 +86,7 @@ export async function claimJobLease(
 }
 
 export async function heartbeatJobLease(
-  env: Pick<DbEnv, 'HYPERDRIVE' | 'APP_KV'>,
+  env: Pick<DbEnv, 'DB' | 'APP_KV'>,
   jobId: string,
   leaseOwner: string,
   leaseSeconds: number,
@@ -104,8 +95,8 @@ export async function heartbeatJobLease(
     env,
     `
       UPDATE jobs
-      SET heartbeat_at = now(),
-          lease_expires_at = now() + ($3 || ' seconds')::interval
+      SET heartbeat_at = ${SQL_NOW},
+          lease_expires_at = strftime('%Y-%m-%dT%H:%M:%fZ', 'now', '+' || $3 || ' seconds')
       WHERE id = $1
         AND lease_owner = $2
         AND status = 'running'
@@ -135,11 +126,11 @@ export async function markJobContinuationQueued(env: DbEnv, jobId: string, delay
     env,
     `
       UPDATE jobs
-      SET heartbeat_at = now(),
+      SET heartbeat_at = ${SQL_NOW},
           continuation_count = continuation_count + 1,
           last_queue_message_at = CASE
-            WHEN $2::int > 0 THEN now() + ($2::text || ' seconds')::interval
-            ELSE now()
+            WHEN $2 > 0 THEN strftime('%Y-%m-%dT%H:%M:%fZ', 'now', '+' || $2 || ' seconds')
+            ELSE ${SQL_NOW}
           END
       WHERE id = $1
         AND status = 'running'
@@ -172,41 +163,34 @@ export async function recoverExpiredJobLeases(
   unleasedGraceSeconds = 300,
   onlyJobIds?: readonly string[] | null,
 ) {
-  const jobIdFilter = onlyJobIds ? [...onlyJobIds] : null;
+  const jobIdFilter = onlyJobIds ? JSON.stringify([...onlyJobIds]) : null;
 
   const requeued = await queryRows<{ id: string }>(
     env,
     `
-      WITH expired AS (
-        SELECT id
-        FROM jobs
-        WHERE status = 'running'
-          AND (
-            (
-              lease_expires_at IS NOT NULL
-              AND lease_expires_at < now()
-            )
-            OR (
-              lease_expires_at IS NULL
-              AND COALESCE(last_queue_message_at, heartbeat_at, started_at, created_at) < now() - ($2 || ' seconds')::interval
-            )
-          )
-          AND recovery_count < $1
-          AND ($3::uuid[] IS NULL OR id = ANY($3::uuid[]))
-        ORDER BY COALESCE(lease_expires_at, last_queue_message_at, heartbeat_at, started_at, created_at) ASC
-        LIMIT 25
-        FOR UPDATE SKIP LOCKED
-      )
-      UPDATE jobs j
+      UPDATE jobs
       SET lease_owner = NULL,
           lease_expires_at = NULL,
           heartbeat_at = NULL,
           recovery_count = recovery_count + 1,
-          last_queue_message_at = now(),
+          last_queue_message_at = ${SQL_NOW},
           error_msg = NULL
-      FROM expired
-      WHERE j.id = expired.id
-      RETURNING j.id
+      WHERE id IN (
+        SELECT id FROM jobs WHERE status = 'running'
+          AND (
+            (lease_expires_at IS NOT NULL AND lease_expires_at < ${SQL_NOW})
+            OR (
+              lease_expires_at IS NULL
+              AND COALESCE(last_queue_message_at, heartbeat_at, started_at, created_at)
+                < strftime('%Y-%m-%dT%H:%M:%fZ', 'now', '-' || $2 || ' seconds')
+            )
+          )
+          AND recovery_count < $1
+          AND ($3 IS NULL OR id IN (SELECT value FROM json_each($3)))
+        ORDER BY COALESCE(lease_expires_at, last_queue_message_at, heartbeat_at, started_at, created_at) ASC
+        LIMIT 25
+      )
+      RETURNING id
     `,
     [maxRecoveryCount, String(unleasedGraceSeconds), jobIdFilter],
   );
@@ -214,60 +198,50 @@ export async function recoverExpiredJobLeases(
   const failed = await queryRows<JobRow>(
     env,
     `
-      WITH expired AS (
-        SELECT id
-        FROM jobs
-        WHERE status = 'running'
-          AND (
-            (
-              lease_expires_at IS NOT NULL
-              AND lease_expires_at < now()
+      UPDATE jobs
+      SET status = 'failed',
+          finished_at = ${SQL_NOW},
+          lease_owner = NULL,
+          lease_expires_at = NULL,
+          heartbeat_at = NULL,
+          error_msg = 'Job timed out: worker crashed or was evicted.',
+          steps = CASE WHEN steps IS NOT NULL THEN (
+            SELECT json_group_array(json(updated)) FROM (
+              SELECT CASE WHEN json_extract(value, '$.status') = 'running'
+                THEN json_set(value, '$.status', 'failed', '$.finishedAt', ${SQL_NOW}, '$.error', 'Job timed out: worker crashed or was evicted.')
+                ELSE value END AS updated
+              FROM json_each(steps) ORDER BY key
             )
+          ) ELSE steps END
+      WHERE id IN (
+        SELECT id FROM jobs WHERE status = 'running'
+          AND (
+            (lease_expires_at IS NOT NULL AND lease_expires_at < ${SQL_NOW})
             OR (
               lease_expires_at IS NULL
-              AND COALESCE(last_queue_message_at, heartbeat_at, started_at, created_at) < now() - ($2 || ' seconds')::interval
+              AND COALESCE(last_queue_message_at, heartbeat_at, started_at, created_at)
+                < strftime('%Y-%m-%dT%H:%M:%fZ', 'now', '-' || $2 || ' seconds')
             )
           )
           AND recovery_count >= $1
-          AND ($3::uuid[] IS NULL OR id = ANY($3::uuid[]))
+          AND ($3 IS NULL OR id IN (SELECT value FROM json_each($3)))
         ORDER BY COALESCE(lease_expires_at, last_queue_message_at, heartbeat_at, started_at, created_at) ASC
         LIMIT 25
-        FOR UPDATE SKIP LOCKED
-      ),
-      updated AS (
-        UPDATE jobs j
-        SET status = 'failed',
-            finished_at = now(),
-            lease_owner = NULL,
-            lease_expires_at = NULL,
-            heartbeat_at = NULL,
-            error_msg = 'Job timed out: worker crashed or was evicted.',
-            steps = CASE
-              WHEN steps IS NOT NULL THEN (
-                SELECT jsonb_agg(
-                  CASE
-                    WHEN s->>'status' = 'running'
-                    THEN s || jsonb_build_object('status', 'failed', 'finishedAt', now(), 'error', 'Job timed out: worker crashed or was evicted.')
-                    ELSE s
-                  END
-                ) FROM jsonb_array_elements(steps) s
-              )
-              ELSE steps
-            END
-        FROM expired
-        WHERE j.id = expired.id
-        RETURNING j.*
       )
-      SELECT u.*, r.owner, r.repo, r.installation_id
-      FROM updated u
-      JOIN repositories r ON u.repository_id = r.id
+      RETURNING *
     `,
     [maxRecoveryCount, String(unleasedGraceSeconds), jobIdFilter],
   );
 
+  const failedJobs = failed.length === 0 ? [] : await queryRows<JobRow>(env, `
+    SELECT j.*, r.owner, r.repo, r.installation_id
+    FROM jobs j JOIN repositories r ON r.id = j.repository_id
+    WHERE j.id IN (SELECT value FROM json_each($1))
+  `, [JSON.stringify(failed.map((row) => row.id))]);
+
   return {
     requeuedJobIds: requeued.map((row) => row.id),
-    failedJobs: failed,
+    failedJobs,
   };
 }
 

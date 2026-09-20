@@ -23,7 +23,7 @@ import {
   makeModelFactory,
 } from './services';
 
-// The composition root: the one place Cloudflare bindings, Postgres and the GitHub/model services are
+// The composition root: the one place Cloudflare bindings, D1 and the GitHub/model services are
 // wired to the engine's ports. @codraoss/core sees this object and nothing else.
 //
 // Called once per Worker invocation, before the job is known. It only allocates closures, so it is

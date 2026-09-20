@@ -9,7 +9,7 @@ import prompts from 'prompts';
 const execAsync = util.promisify(exec);
 
 import { WRANGLER_JSONC_PATH, WORKER_DIR, getEnvVars, setSecret } from './setup-helpers.js';
-import { handleHyperdrive, handleKVNamespace } from './setup-provisioning.js';
+import { handleD1Database, handleKVNamespace } from './setup-provisioning.js';
 
 
 async function main() {
@@ -65,26 +65,8 @@ async function main() {
 
   console.log('');
 
-  console.log(chalk.cyan.bold('🗄️  Hyperdrive'));
-  console.log(chalk.gray(`  (Using default from .dev.vars if available)`));
-  const { dbUrl } = await prompts({
-    type: 'text',
-    name: 'dbUrl',
-    message: 'Enter your Database Connection String for Hyperdrive:',
-    initial: env.DATABASE_URL || 'postgres://user:password@hostname:5432/codra'
-  }, {
-    onCancel: () => {
-      console.log(chalk.red('\n🛑 Setup aborted.'));
-      process.exit(1);
-    }
-  });
-
-  if (!dbUrl) {
-    console.log(chalk.red('❌ Database URL is required for Hyperdrive. Exiting.'));
-    process.exit(1);
-  }
-
-  const hyperdriveId = await handleHyperdrive(dbUrl);
+  console.log(chalk.cyan.bold('🗄️  D1'));
+  const d1DatabaseId = await handleD1Database('codra-db');
   console.log('');
 
   console.log(chalk.cyan.bold('🌐 Domain Configuration'));
@@ -187,10 +169,10 @@ async function main() {
     configChanged = true;
   }
 
-  if (hyperdriveId) {
+  if (d1DatabaseId) {
     wranglerConfig = wranglerConfig.replace(
-      /"binding":\s*"HYPERDRIVE",\s*"id":\s*"[^"]+"/,
-      `"binding": "HYPERDRIVE",${os.EOL}      "id": "${hyperdriveId}"`
+      /("binding":\s*"DB",[\s\S]*?"database_id":\s*)"[^"]+"/,
+      `$1"${d1DatabaseId}"`
     );
     configChanged = true;
   }
