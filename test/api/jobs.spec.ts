@@ -1,7 +1,7 @@
 import { createApiRouter } from '@codraoss/api';
 import { getJobForProcessing, insertJob } from '@codraoss/db/jobs';
 
-import { createTestEnv, uniqueName } from '../helpers';
+import { createTestEnv, responseCookie, uniqueName } from '../helpers';
 import { vi } from 'vitest';
 
 
@@ -37,7 +37,9 @@ describe('Dashboard API: jobs, stats and queue messages', () => {
     const state = authLocation ? new URL(authLocation).searchParams.get('state') : null;
     expect(state).toBeTruthy();
 
-    const callback = await app.request(`/auth/github/callback?code=test-code&state=${state}`, {}, env);
+    const callback = await app.request(`/auth/github/callback?code=test-code&state=${state}`, {
+      headers: { Cookie: responseCookie(authStart, 'codra_oauth_state') },
+    }, env);
     const cookieHeader = callback.headers.get('set-cookie') || '';
     const match = cookieHeader.match(/codra_session=([^;]+)/);
 

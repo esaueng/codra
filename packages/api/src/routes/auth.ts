@@ -1,6 +1,27 @@
 import { Hono } from 'hono';
 import type { ApiEnv } from '../ports';
 import { createSession, destroySession } from '../sessions';
+import { deleteCookie, getCookie, setCookie } from 'hono/cookie';
+
+const OAUTH_STATE_COOKIE = 'codra_oauth_state';
+const OAUTH_STATE_TTL_SECONDS = 60 * 10;
+
+function stateMatchesCookie(state: string, cookieState: string) {
+  if (state.length !== cookieState.length) return false;
+  let difference = 0;
+  for (let index = 0; index < state.length; index += 1) {
+    difference |= state.charCodeAt(index) ^ cookieState.charCodeAt(index);
+  }
+  return difference === 0;
+}
+
+function clearOAuthStateCookie(c: Parameters<typeof deleteCookie>[0]) {
+  deleteCookie(c, OAUTH_STATE_COOKIE, {
+    path: '/auth/github/callback',
+    secure: true,
+    sameSite: 'Lax',
+  });
+}
 
 function redirectToLogin(reason: string) {
   const params = new URLSearchParams({ error: reason });
@@ -22,10 +43,19 @@ export function createAuthRouter() {
   app.get('/github', async (c) => {
     const state = await c.env.deps.authProvider.createOAuthState();
     const result = await c.env.deps.authProvider.beginAuthorization(c.env.AUTH_CALLBACK_URL, state);
+    setCookie(c, OAUTH_STATE_COOKIE, state, {
+      httpOnly: true,
+      secure: true,
+      sameSite: 'Lax',
+      path: '/auth/github/callback',
+      maxAge: OAUTH_STATE_TTL_SECONDS,
+    });
     return c.redirect(result.url, 302);
   });
 
   app.get('/github/callback', async (c) => {
+    const cookieState = getCookie(c, OAUTH_STATE_COOKIE);
+    clearOAuthStateCookie(c);
     const error = c.req.query('error');
     if (error) {
       return c.redirect(redirectToLogin(error), 302);
@@ -33,7 +63,10 @@ export function createAuthRouter() {
 
     const code = c.req.query('code')?.trim();
     const state = c.req.query('state')?.trim();
-    if (!code || !state) {
+    if (!state || !cookieState || !stateMatchesCookie(state, cookieState)) {
+      return c.redirect(redirectToLogin('invalid_state'), 302);
+    }
+    if (!code) {
       return c.redirect(redirectToLogin('invalid_callback'), 302);
     }
 

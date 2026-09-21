@@ -6,6 +6,7 @@ import { getOrCreateRepository } from './repositories';
 import { reviewCommentsAggregate } from './review-comment-sql';
 import { type JobRow, bytesToHex, mapJob } from './jobs-mapping';
 import { markSystemActive } from './jobs-activity';
+import { hasPendingWebhookQueueSubmissions } from './webhook-deliveries';
 
 type JobDetailRow = JobRow & {
   files_json: unknown[] | string | null;
@@ -53,7 +54,7 @@ export async function hasPendingMaintenanceWork(env: DbEnv): Promise<boolean> {
       ) AS has_work
     `,
   );
-  return Boolean(rows[0]?.has_work);
+  return Boolean(rows[0]?.has_work) || await hasPendingWebhookQueueSubmissions(env);
 }
 
 export async function insertJob(

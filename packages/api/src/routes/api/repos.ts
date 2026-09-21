@@ -65,11 +65,30 @@ export function createReposRouter() {
     try {
       const installations = await c.env.deps.gitProvider.listInstallations();
       const synced: string[] = [];
+      const failures: Array<{
+        installationId: string;
+        repository?: string;
+        stage: 'inventory' | 'write' | 'cleanup';
+        error: string;
+      }> = [];
       const repoConfigs = c.env.deps.repositories.repoConfigs;
 
       for (const inst of installations) {
+        const installationId = String(inst.id);
         const github = c.env.deps.gitProvider.createService(String(inst.id));
-        const repos = await github.listRepositories();
+        let repos: any[];
+        try {
+          repos = await github.listRepositories();
+        } catch (inventoryError) {
+          const error = inventoryError instanceof Error ? inventoryError.message : String(inventoryError);
+          failures.push({ installationId, stage: 'inventory', error });
+          c.env.deps.platform.logger.error(`Failed to retrieve complete repository inventory for installation ${installationId}; stale cleanup skipped`, inventoryError);
+          continue;
+        }
+
+        // Retention is based only on GitHub's complete inventory. A DB write failure must never make
+        // a still-installed repository look stale and erase its settings.
+        const activeRepoFullNames = repos.map((repo: any) => `${repo.owner.login}/${repo.name}`);
 
         const results = await mapWithConcurrency(
           repos,
@@ -80,30 +99,43 @@ export function createReposRouter() {
             const fullName = `${owner}/${name}`;
             try {
               await repoConfigs.syncRepoConfig(c.env as any, {
-                installationId: String(inst.id),
+                installationId,
                 owner,
                 repo: name,
               });
               return fullName;
             } catch (repoError) {
               c.env.deps.platform.logger.error(`Failed to sync repo: ${fullName}`, repoError);
+              failures.push({
+                installationId,
+                repository: fullName,
+                stage: 'write',
+                error: repoError instanceof Error ? repoError.message : String(repoError),
+              });
               return null;
             }
           },
         );
 
-        const installationSynced: string[] = [];
         for (const res of results) {
           if (res) {
             synced.push(res);
-            installationSynced.push(res);
           }
         }
-        
-        await repoConfigs.deleteStaleRepoConfigs(c.env as any, String(inst.id), installationSynced);
+
+        try {
+          await repoConfigs.deleteStaleRepoConfigs(c.env as any, installationId, activeRepoFullNames);
+        } catch (cleanupError) {
+          failures.push({
+            installationId,
+            stage: 'cleanup',
+            error: cleanupError instanceof Error ? cleanupError.message : String(cleanupError),
+          });
+          c.env.deps.platform.logger.error(`Failed to clean stale repositories for installation ${installationId}`, cleanupError);
+        }
       }
 
-      return c.json({ ok: true, synced });
+      return c.json({ ok: failures.length === 0, partial: failures.length > 0, synced, failures });
     } catch (error) {
       c.env.deps.platform.logger.error('Manual sync failed:', error);
       return jsonError(`Sync failed: ${error instanceof Error ? error.message : String(error)}`, 500);

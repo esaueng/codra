@@ -1,7 +1,7 @@
 import { createApiRouter } from '@codraoss/api';
 import type { AppBindings } from '@server/env';
 
-import { createTestEnv, dbDescribe } from '../helpers';
+import { createTestEnv, dbDescribe, responseCookie } from '../helpers';
 
 dbDescribe('createApiRouter options', () => {
   async function signIn(app: ReturnType<typeof createApiRouter>, env: AppBindings) {
@@ -20,7 +20,9 @@ dbDescribe('createApiRouter options', () => {
     const authStart = await app.request('/auth/github', {}, env);
     const location = authStart.headers.get('location');
     const state = location ? new URL(location).searchParams.get('state') : null;
-    const callback = await app.request(`/auth/github/callback?code=test-code&state=${state}`, {}, env);
+    const callback = await app.request(`/auth/github/callback?code=test-code&state=${state}`, {
+      headers: { Cookie: responseCookie(authStart, 'codra_oauth_state') },
+    }, env);
     const match = (callback.headers.get('set-cookie') || '').match(/codra_session=([^;]+)/);
     return match ? match[1] : '';
   }

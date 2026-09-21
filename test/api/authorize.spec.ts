@@ -3,7 +3,7 @@ import type { AuthorizeContext, AuthzPort } from '@codraoss/api';
 import { getJobForProcessing, insertJob } from '@codraoss/db/jobs';
 import type { AppBindings } from '@server/env';
 
-import { createTestEnv, dbDescribe, uniqueName } from '../helpers';
+import { createTestEnv, dbDescribe, responseCookie, uniqueName } from '../helpers';
 
 dbDescribe('Dashboard API: authorization port', () => {
   const app = createApiRouter();
@@ -26,7 +26,9 @@ dbDescribe('Dashboard API: authorization port', () => {
     const authStart = await app.request('/auth/github', {}, env);
     const location = authStart.headers.get('location');
     const state = location ? new URL(location).searchParams.get('state') : null;
-    const callback = await app.request(`/auth/github/callback?code=test-code&state=${state}`, {}, env);
+    const callback = await app.request(`/auth/github/callback?code=test-code&state=${state}`, {
+      headers: { Cookie: responseCookie(authStart, 'codra_oauth_state') },
+    }, env);
     const match = (callback.headers.get('set-cookie') || '').match(/codra_session=([^;]+)/);
     return match ? match[1] : '';
   }
