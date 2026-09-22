@@ -16,6 +16,14 @@ export async function runPreparePhase(
   const pr = await github.getPullRequest(job.owner, job.repo, job.prNumber);
   const config = (job.configSnapshot ?? defaultRepoConfig) as RepoConfig;
 
+  // Queue deliveries can outlive the commit they were created for. Stop before creating a check,
+  // fetching a diff, or calling a model rather than reviewing the new head on the stale job's bill.
+  if (pr.head.sha !== job.commitSha) {
+    await env.jobs.cancelJob(job.id);
+    logger.info(`Discarded stale review job ${job.id}: expected ${job.commitSha}, current head is ${pr.head.sha}.`);
+    return;
+  }
+
   try {
     await env.jobs.setJobPullRequestMeta(job.id, {
       prTitle: pr.title ?? null,

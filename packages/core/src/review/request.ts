@@ -10,6 +10,8 @@ function shouldTriggerFromChangeRequest(action: ChangeRequestWebhookPayload['act
   return (config.on as string[]).includes(action);
 }
 
+const TRUSTED_AUTHOR_ASSOCIATIONS = new Set(['OWNER', 'MEMBER', 'COLLABORATOR']);
+
 export type ReviewRequest = {
   installationId: string;
   owner: string;
@@ -36,6 +38,14 @@ export function extractReviewRequest(input: {
       return null;
     }
     if (!shouldTriggerFromChangeRequest(payload.action, input.config.review)) {
+      return null;
+    }
+    // A signed webhook proves that GitHub sent it, not that the person pushing to a fork may spend
+    // this installation's model budget. Initial reviews remain available for outside contributors,
+    // but repeated automatic reviews require a repository role. Maintainers can still explicitly
+    // request another review through the separately-authorized mention/dashboard paths.
+    if (payload.action === 'synchronize'
+      && !TRUSTED_AUTHOR_ASSOCIATIONS.has(payload.changeRequest.authorAssociation ?? '')) {
       return null;
     }
 

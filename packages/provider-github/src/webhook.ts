@@ -24,6 +24,7 @@ export function normalizeGitHubWebhook(
           base: { sha: prPayload.pull_request.base.sha, ref: prPayload.pull_request.base.ref },
           draft: prPayload.pull_request.draft,
           body: prPayload.pull_request.body,
+          authorAssociation: prPayload.pull_request.author_association ?? null,
         },
       },
     };

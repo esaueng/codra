@@ -92,6 +92,7 @@ export interface JobStore {
     errorMessage?: string | null;
   }): Promise<void>;
   failJob(jobId: string, errorMessage: string): Promise<void>;
+  cancelJob(jobId: string): Promise<boolean>;
   supersedeOlderJobs(input: {
     installationId: string;
     owner: string;

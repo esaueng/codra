@@ -214,6 +214,11 @@ export function createInMemoryRuntime(
         record('failJob');
         patch(jobId, { status: 'failed', errorMessage });
       },
+      cancelJob: async (jobId) => {
+        record('cancelJob');
+        patch(jobId, { status: 'cancelled' });
+        return true;
+      },
       supersedeOlderJobs: async () => 0,
     },
 

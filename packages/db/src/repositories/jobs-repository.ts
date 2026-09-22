@@ -2,6 +2,7 @@ import type { JobLeaseClaim as CoreJobLeaseClaim, JobRow as CoreJobRow, JobStore
 import type { DbEnv } from '../env';
 import {
   claimJobLease,
+  cancelJob,
   completeJob,
   completePreparationStep,
   failJob,
@@ -71,6 +72,7 @@ export function makeJobStore(env: DbEnv): JobStore {
     updateJobStep: (jobId, stepName, update) => updateJobStep(env, jobId, stepName, update),
     completeJob: (jobId, input) => completeJob(env, jobId, input),
     failJob: (jobId, errorMessage) => failJob(env, jobId, errorMessage),
+    cancelJob: (jobId) => cancelJob(env, jobId),
     supersedeOlderJobs: (input) => supersedeOlderJobs(env, input),
 
     recoverExpiredJobLeases: (maxCount) => recoverExpiredJobLeases(env, maxCount),
