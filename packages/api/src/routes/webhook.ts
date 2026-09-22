@@ -204,6 +204,16 @@ export async function handleGitHubWebhook(c: Context<ApiEnv>) {
       config: repoConfig.parsedJson,
     });
 
+    // Do not spend queue capacity on automatic PR events rejected by policy (notably an
+    // untrusted contributor's synchronize event). Closed events still reach the worker because
+    // they may need to remove Codra's labels.
+    if (!extracted
+      && normalized.eventName === 'change_request'
+      && normalized.payload.action === 'synchronize') {
+      await c.env.deps.repositories.webhookDeliveries.markWebhookDeliveryProcessed(c.env as any, deliveryId, 'ignored');
+      return c.json({ ok: true, ignored: true }, 202);
+    }
+
     if (extracted?.commitSha && extracted.baseSha) {
       const jobsRepo = c.env.deps.repositories.jobs;
       const existingJob = await jobsRepo.findExistingJobForHead(c.env as any, {

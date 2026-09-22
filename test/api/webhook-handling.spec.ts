@@ -116,6 +116,58 @@ describe('Webhook Handling Suite', () => {
     expect(queue.sent[0].payload).toBeUndefined();
   });
 
+  it('does not queue synchronize reviews for contributors without a repository role', async () => {
+    const rawPayload = createMockPRWebhook({
+      action: 'synchronize',
+      repository: { name: uniqueName('external-sync'), owner: { login: 'test-owner' } },
+    });
+    rawPayload.pull_request.author_association = 'NONE';
+    rawPayload.pull_request.head.sha = 'c'.repeat(40);
+    rawPayload.pull_request.base.sha = 'd'.repeat(40);
+    const body = JSON.stringify(rawPayload);
+    const signature = await signPayload(env.GITHUB_APP_WEBHOOK_SECRET, body);
+
+    const response = await app.request('http://codra.test/webhook', {
+      method: 'POST',
+      headers: {
+        'x-github-event': 'pull_request',
+        'x-github-delivery': uniqueName('external-sync-delivery'),
+        'x-hub-signature-256': signature,
+      },
+      body,
+    }, env);
+
+    expect(response.status).toBe(202);
+    expect(await response.json()).toEqual({ ok: true, ignored: true });
+    expect((env.REVIEW_QUEUE as any).sent).toHaveLength(0);
+  });
+
+  it('continues to queue synchronize reviews for repository collaborators', async () => {
+    const rawPayload = createMockPRWebhook({
+      action: 'synchronize',
+      repository: { name: uniqueName('trusted-sync'), owner: { login: 'test-owner' } },
+    });
+    rawPayload.pull_request.author_association = 'COLLABORATOR';
+    rawPayload.pull_request.head.sha = 'e'.repeat(40);
+    rawPayload.pull_request.base.sha = 'f'.repeat(40);
+    const body = JSON.stringify(rawPayload);
+    const signature = await signPayload(env.GITHUB_APP_WEBHOOK_SECRET, body);
+
+    const response = await app.request('http://codra.test/webhook', {
+      method: 'POST',
+      headers: {
+        'x-github-event': 'pull_request',
+        'x-github-delivery': uniqueName('trusted-sync-delivery'),
+        'x-hub-signature-256': signature,
+      },
+      body,
+    }, env);
+
+    expect(response.status).toBe(202);
+    expect(await response.json()).toMatchObject({ ok: true, message: 'queued' });
+    expect((env.REVIEW_QUEUE as any).sent).toHaveLength(1);
+  });
+
   it('resumes an unsent queue submission when GitHub redelivers the webhook', async () => {
     const recoveryEnv = createTestEnv();
     const repoName = uniqueName('redelivery-recovery');

@@ -125,6 +125,19 @@ export async function runReview(env: ReviewRuntime, message: ReviewJobMessage): 
   const formatter = env.createFormatter();
 
   try {
+    // A PR can move after preparation but before a later workflow phase starts. Revalidate every
+    // continuation before any model work or repository writes; prepare performs the same check
+    // with the PR response it already needs.
+    if (phase !== 'prepare') {
+      const pr = await github.getPullRequest(job.owner, job.repo, job.prNumber);
+      if (pr.head.sha !== job.commitSha) {
+        await env.jobs.cancelJob(job.id);
+        logger.info(`Discarded stale review job ${job.id}: expected ${job.commitSha}, current head is ${pr.head.sha}.`);
+        await env.jobs.releaseJobLease(job.id, leaseOwner);
+        return { action: 'ack' };
+      }
+    }
+
     if (phase === 'prepare') {
       await runPreparePhase(env, job, leaseOwner, github);
     } else if (phase === 'finalize') {

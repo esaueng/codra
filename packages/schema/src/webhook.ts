@@ -12,6 +12,7 @@ export type ChangeRequestWebhookPayload = {
     base: { sha: string; ref: string };
     draft: boolean;
     body: string | null;
+    authorAssociation: string | null;
   };
 };
 
